@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: kaka-liquor
+    runtime: python
+    plan: free
+    buildCommand: "python -m compileall -q ."
+    startCommand: "python kaka_liquor_app.py"
+    healthCheckPath: /health
+    envVars:
+      - key: KAKA_DATA_DIR
+        value: /tmp/kaka-liquor-data
+      - key: KAKA_SECURE_COOKIE
+        value: "1"
+      - key: KAKA_PORT
+        value: "10000"
+      - key: KAKA_INITIAL_ADMIN_PASSWORD
+        sync: false
