@@ -254,6 +254,8 @@ class DB:
         c.execute("UPDATE settings SET value='MONTEZ',updated_at=? WHERE key IN ('receipt_prefix','mpesa_account_reference_prefix') AND value='KAKA'",(t,))
         c.execute("UPDATE settings SET value='MONTEZ LIQUOR',updated_at=? WHERE key='mpesa_transaction_desc' AND value='KAKA LIQUOR WINES AND SPIRIT'",(t,))
         c.execute("UPDATE permissions SET label='MONTEZ LIQUOR AI Assistant' WHERE key='AI_ASSISTANT' AND label IN ('KAKA LIQUOR WINES AND SPIRIT AI Assistant','KAKA LIQUOR AI Assistant')")
+        c.execute("UPDATE settings SET value='Thank you for shopping with us. | Powered by SHADYTECHSOLUTIONS',updated_at=? WHERE key='receipt_footer' AND value='Thank you for shopping with us.'",(t,))
+        c.execute("UPDATE settings SET value='Powered by SHADYTECHSOLUTIONS',updated_at=? WHERE key='report_footer' AND (value IS NULL OR TRIM(value)='')",(t,))
         if not c.execute("SELECT 1 FROM settings WHERE key='management_dashboard_v1'").fetchone():
             c.execute("UPDATE role_permissions SET enabled=1 WHERE role='MANAGEMENT' AND key='VIEW_DASHBOARD'")
             c.execute("INSERT INTO settings(key,value,updated_at,updated_by) VALUES('management_dashboard_v1','1',?,NULL)",(t,))
