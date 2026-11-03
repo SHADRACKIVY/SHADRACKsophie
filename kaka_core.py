@@ -479,6 +479,8 @@ def create_sale(u, data):
     c=db.c()
     try:
         branch_id=u.get('branch_id')
+        if not branch_id and str(u.get('access_role') or u.get('role') or '').upper()=='SALES':
+            raise ValueError('Your Sales Person account must be assigned to a branch by Administrator before making sales.')
         if not branch_id:
             branch=c.execute('SELECT id FROM branches WHERE active=1 ORDER BY id LIMIT 1').fetchone()
             if not branch: raise ValueError('No active branch exists. Ask Administrator to register a branch.')
