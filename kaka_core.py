@@ -484,13 +484,10 @@ def create_sale(u, data):
     if not cart: raise ValueError('Cart is empty.')
     c=db.c()
     try:
-        branch_id=u.get('branch_id')
-        if not branch_id and str(u.get('access_role') or u.get('role') or '').upper()=='SALES':
-            raise ValueError('Your Sales Person account must be assigned to a branch by Administrator before making sales.')
-        if not branch_id:
-            branch=c.execute('SELECT id FROM branches WHERE active=1 ORDER BY id LIMIT 1').fetchone()
-            if not branch: raise ValueError('No active branch exists. Ask Administrator to register a branch.')
-            branch_id=branch['id']
+        role=str(u.get('access_role') or u.get('role') or '').upper()
+        branch_id=(data.get('branch_id') if role in ('ADMIN','MANAGEMENT') else u.get('branch_id'))
+        if not branch_id: raise ValueError('Select an active branch before making a sale. Sales Person accounts must be assigned to a branch by Administrator.')
+        branch_id=int(branch_id)
         active_branch=c.execute('SELECT id FROM branches WHERE id=? AND active=1',(branch_id,)).fetchone()
         if not active_branch: raise ValueError('Your assigned branch is inactive. Contact Administrator.')
         total=Decimal('0'); byprod={}; lines=[]
