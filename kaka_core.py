@@ -590,12 +590,13 @@ def dashboard(branch_id=None):
     mp=c.execute('SELECT COALESCE(SUM(sp.amount),0) v FROM sale_payments sp JOIN sales s ON s.id=sp.sale_id WHERE substr(s.sold_at,1,10)=? AND sp.payment_method="MPESA"'+pay_scope,pay_args).fetchone()
     cash=c.execute('SELECT COALESCE(SUM(sp.amount),0) v FROM sale_payments sp JOIN sales s ON s.id=sp.sale_id WHERE substr(s.sold_at,1,10)=? AND sp.payment_method="CASH"'+pay_scope,pay_args).fetchone()
     cogs=c.execute('SELECT COALESCE(SUM(sl.qty*sl.unit_cost),0) v,COUNT(*) n,SUM(CASE WHEN COALESCE(sl.cogs_cost_source,"RECORDED")="MISSING_COST" OR COALESCE(sl.unit_cost,0)<=0 THEN 1 ELSE 0 END) missing,SUM(CASE WHEN COALESCE(sl.cogs_cost_source,"RECORDED")="ESTIMATED_CURRENT_AVG_COST" THEN 1 ELSE 0 END) estimated FROM sale_lines sl JOIN sales s ON s.id=sl.sale_id WHERE substr(s.sold_at,1,10)=?'+pay_scope,pay_args).fetchone()
+    all_revenue=c.execute('SELECT COALESCE(SUM(total),0) v FROM sales WHERE substr(sold_at,1,10)=?'+scope,args).fetchone()['v']
     stock_scope=' AND bs.branch_id=?' if branch_id is not None else ''
     stock_args=(int(branch_id),) if branch_id is not None else ()
     stock=c.execute('SELECT COALESCE(SUM(bs.qty*bs.avg_cost),0) v,COALESCE(SUM(bs.qty*bs.sell_price),0) retail_v,COALESCE(SUM(bs.qty),0) units,SUM(CASE WHEN bs.qty<=bs.reorder_level THEN 1 ELSE 0 END) low FROM branch_stock bs JOIN products p ON p.id=bs.product_id WHERE p.active=1'+stock_scope,stock_args).fetchone()
     c.close()
     cv=float(cogs['v'] or 0); rev=float(s['v'] or 0)
-    return {'today_sales':rev,'transactions':s['n'],'expenses':p['v'],'mpesa':mp['v'],'cash':cash['v'],'today_cogs':cv,'today_gross_profit':rev-cv,'cogs_lines':int(cogs['n'] or 0),'cogs_missing_lines':int(cogs['missing'] or 0),'cogs_estimated_lines':int(cogs['estimated'] or 0),'stock_value':stock['v'],'stock_retail_value':stock['retail_v'],'stock_units':stock['units'],'low_stock':stock['low'] or 0}
+    return {'today_sales':rev,'transactions':s['n'],'expenses':p['v'],'mpesa':mp['v'],'cash':cash['v'],'today_cogs':cv,'today_gross_profit':float(all_revenue or 0)-cv,'cogs_lines':int(cogs['n'] or 0),'cogs_missing_lines':int(cogs['missing'] or 0),'cogs_estimated_lines':int(cogs['estimated'] or 0),'stock_value':stock['v'],'stock_retail_value':stock['retail_v'],'stock_units':stock['units'],'low_stock':stock['low'] or 0}
 
 def live_monitoring(branch_id=None):
     c=db.c(); nowdt=now(); cutoff=(dt.datetime.now(dt.timezone.utc).timestamp()-int(float(get_setting('idle_timeout_minutes','2'))*60))
