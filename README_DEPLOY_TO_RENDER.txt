@@ -1,7 +1,7 @@
-KAKA LIQUOR WINES AND SPIRIT — RENDER FREE TEST DEPLOYMENT
+MONTEZ LIQUOR — RENDER FREE TEST DEPLOYMENT
 
 This is a FREE-plan deployment package for initial testing only.
-It is the KAKA LIQUOR app, not the full YES WE KEN dashboard.
+It is the MONTEZ LIQUOR app, not the full YES WE KEN dashboard.
 
 IMPORTANT FREE-PLAN LIMITATION
 Render Free web services do not support persistent disks. This package stores SQLite data under /tmp/kaka-liquor-data, which is temporary. Data can be lost when the service restarts, sleeps, or redeploys. Do not use this free deployment for real sales, stock, customer credit records, or business accounting until the database is moved to persistent/managed storage and tested.
