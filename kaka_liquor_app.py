@@ -822,6 +822,37 @@ def mpesa_live_messages_html(items):
 def mpesa_live_messages_json():
     return {'timestamp':now(),'messages':mpesa_live_messages(8),'refresh_seconds':max(2,int(float(core.get_setting('live_refresh_seconds','5'))))}
 
+def branch_scope_for(u, query=None):
+    """Resolve branch access from the authenticated role, never from an untrusted branch parameter for branch staff."""
+    role=role_name(u); query=query or {}
+    if role in ('ADMIN','MANAGEMENT'):
+        raw=_qsval(query,'branch_id','')
+        if not str(raw).strip(): return None
+        if not str(raw).isdigit(): raise ValueError('Invalid branch selection.')
+        bid=int(raw); c=core.db.c()
+        try: ok=c.execute('SELECT 1 FROM branches WHERE id=? AND active=1',(bid,)).fetchone()
+        finally: c.close()
+        if not ok: raise PermissionError('You are not authorised to view that branch.')
+        return bid
+    bid=int(u.get('branch_id') or 0)
+    if not bid: raise PermissionError('Your account has no assigned branch. Contact Administrator.')
+    c=core.db.c()
+    try: ok=c.execute('SELECT 1 FROM branches WHERE id=? AND active=1',(bid,)).fetchone()
+    finally: c.close()
+    if not ok: raise PermissionError('Your assigned branch is inactive. Contact Administrator.')
+    return bid
+
+
+def branch_scope_selector(u, query=None, path='/'):
+    if role_name(u) not in ('ADMIN','MANAGEMENT'): return ''
+    selected=branch_scope_for(u,query)
+    c=core.db.c()
+    try: branches=[dict(r) for r in c.execute('SELECT id,name FROM branches WHERE active=1 ORDER BY name').fetchall()]
+    finally: c.close()
+    opts='<option value="">ALL BRANCHES — COMPANY TOTAL</option>'+''.join(f'<option value="{int(b["id"])}" {"selected" if selected==int(b["id"]) else ""}>{esc(b["name"])}</option>' for b in branches)
+    return f'<section class="card" style="margin-bottom:12px"><form method="get" action="{esc(path)}" class="form-grid"><div><label>Dashboard / Report Branch</label><select name="branch_id" onchange="this.form.submit()">{opts}</select></div><div class="muted" style="align-self:end">Select one branch to view only its stock and transactions, or choose company total.</div></form></section>'
+
+
 def dashboard_greeting(u):
     hour=dt.datetime.now().hour
     if 5 <= hour < 12:
@@ -859,18 +890,24 @@ def monthly_awards_html(start, end):
         return '<h3 style="margin-top:10px">'+label+'</h3>'+html_table(['Award','Rank',label,'Sales Revenue','Revenue Share'],body,'No salespeople/branches registered.')
     return f'''<section class="card" style="margin-top:14px"><div class="section-head"><div><h2>🏆 Monthly Branch & Employee Awards</h2><div class="muted">Live standings for {esc(start[:7])}. Rankings use recorded sales revenue and update as sales are recorded.</div></div><a class="btn gold" href="/branch-performance?preset=THIS_MONTH">OPEN FULL REPORT</a></div><div class="notice">🥇 Gold = 1st · 🥈 Silver = 2nd · 🥉 Bronze = 3rd · Participant = 4th onward. Periods with no sales receive no medal.</div>{make_table(branches,'name','Branch Awards')}{make_table(employees,'full_name','Employee Awards')}</section>'''
 
-def home_page(u):
+def home_page(u, query=None):
     require_perm_user(u,'VIEW_DASHBOARD')
+    branch_id=branch_scope_for(u,query)
     settings=core.get_settings(); business_name=settings.get('business_name',APP_NAME); branch_name=settings.get('business_branch_name','')
-    d=core.dashboard(); live=core.live_monitoring(); live['active_users']=active_user_count(); chart=daily_chart(); mp_live=mpesa_live_messages(8)
-    tstart=f"{now()[:10]} 00:00:00"; tend=f"{now()[:10]} 23:59:59"; pt=core.business_performance(tstart,tend)
-    mstart=f"{now()[:7]}-01 00:00:00"; mend=f"{now()[:10]} 23:59:59"; pm=core.business_performance(mstart,mend)
+    if branch_id is not None:
+        c=core.db.c(); br=c.execute('SELECT name FROM branches WHERE id=?',(branch_id,)).fetchone(); c.close(); branch_name=br['name'] if br else 'Selected Branch'
+    elif role_name(u) in ('ADMIN','MANAGEMENT'): branch_name='All Branches — Company Total'
+    d=core.dashboard(branch_id); live=core.live_monitoring(branch_id); live['active_users']=active_user_count(); chart=daily_chart(branch_id); mp_live=mpesa_live_messages(8)
+    tstart=f"{now()[:10]} 00:00:00"; tend=f"{now()[:10]} 23:59:59"; pt=core.business_performance(tstart,tend,branch_id)
+    mstart=f"{now()[:7]}-01 00:00:00"; mend=f"{now()[:10]} 23:59:59"; pm=core.business_performance(mstart,mend,branch_id)
     def perf_card(p,label):
         cls='green' if p['traffic']=='GREEN' else 'red'
         return f'<section class="card performance-card"><div class="section-head"><div><h2>{esc(label)}</h2><div class="muted">{esc(p["label"])} · Green threshold {p["threshold"]}%</div></div><span class="pill">{esc(p["basis"])}</span></div><div class="performance-row"><div class="performance-ring {cls}" style="--pct:{max(0,min(100,p["score"])):.1f}"><div>{p["percentage"]:.1f}%</div></div><div><div class="performance-status {cls}">{p["status"]}</div><div class="performance-caption">Revenue {money(p["revenue"])} · Expenses {money(p["expenses"])} · Net {money(p["net_profit"])}</div><div class="performance-caption">{esc(p["start"])} → {esc(p["end"])}</div></div></div></section>'
     performance_html=perf_card(pt,'Today Business Performance')+perf_card(pm,'This Month Business Performance')
+    branch_selector=branch_scope_selector(u,query,'/')
+    cogs_status=(f'<div class="flash error">COGS WARNING: {d[\"cogs_missing_lines\"]} sold line(s) have no valid cost; {d[\"cogs_estimated_lines\"]} line(s) use estimated costs. Profit figures may be inaccurate until costs are corrected.</div>' if (d['cogs_missing_lines'] or d['cogs_estimated_lines']) else f'<div class="notice">COGS data coverage: {core.pl_summary(tstart,tend,branch_id)[\"cogs_coverage_pct\"]:.1f}% recorded-cost coverage for today.</div>')
     awards_html=monthly_awards_html(mstart,mend) if role_name(u) in ('ADMIN','MANAGEMENT') else ''
-    content=f'''<section class="card" style="margin-bottom:14px"><div class="section-head"><div><h2 style="margin:0">{esc(dashboard_greeting(u))}</h2><div class="muted">Welcome to {esc(business_name)}{(' · '+esc(branch_name)) if branch_name else ''}</div></div><span class="pill">{esc(role_display(role_name(u)))}</span></div></section><div class="grid kpis"><div class="card kpi"><div class="label">TODAY SALES</div><strong>{money(d['today_sales'])}</strong><div class="muted">{d['transactions']} transactions</div></div><div class="card kpi"><div class="label">CASH</div><strong>{money(d['cash'])}</strong></div><div class="card kpi"><div class="label">M-PESA</div><strong>{money(d['mpesa'])}</strong></div><div class="card kpi"><div class="label">TODAY EXPENSES</div><strong>{money(d['expenses'])}</strong></div><div class="card kpi"><div class="label">TOTAL STOCK WORTH · COGS / AT COST</div><strong>{money(d['stock_value'])}</strong><div class="muted">{d['stock_units']:,.0f} units in stock · valued at average unit cost</div><a class="muted" href="/stock-report">View stock valuation</a></div><div class="card kpi"><div class="label">POTENTIAL RETAIL VALUE</div><strong>{money(d['stock_retail_value'])}</strong><div class="muted">Estimated value if all current stock sells at listed prices</div></div><div class="card kpi"><div class="label">LOW STOCK</div><strong>{live['low_stock']}</strong></div><div class="card kpi"><div class="label">ACTIVE USERS</div><strong>{live['active_users']}</strong></div></div><div class="performance-grid" style="margin-top:14px">{performance_html}</div>{awards_html}<div class="grid two" style="margin-top:14px"><section class="card"><div class="section-head"><h2>14-Day Sales Trend</h2><span class="pill">LIVE DATA</span></div>{chart}</section><section class="card"><div class="section-head"><h2>System Accountability</h2><span class="pill">SIGNED IN</span></div><div class="metric"><div class="muted">USER</div><div class="v">{esc(u['full_name'])}</div><div class="muted">@{esc(u['username'])} · {esc(role_display(role_name(u)))}</div></div><div class="metric" style="margin-top:9px"><div class="muted">SERVER TIME</div><div class="v">{now()}</div></div></section></div><div class="grid two" style="margin-top:14px"><section class="card mpesa-live-card"><div class="mpesa-live-head"><div><h2 style="margin:0">Live M-Pesa Messages</h2><div class="muted">{esc(settings.get('mpesa_shortcode',''))} · refreshes automatically</div></div><span class="pill">LIVE</span></div><div id="mpesa-live-messages">{mpesa_live_messages_html(mp_live)}</div></section><section class="card"><div class="section-head"><h2>Low Stock</h2><a class="btn" href="/stock-report">VIEW STOCK</a></div>{html_table(['Product','Stock','Reorder Level'],[[esc(p['name']),p['stock_qty'],p['reorder_level']] for p in low_stock()],'No low-stock products.')}</section></div><div class="grid two" style="margin-top:14px"><section class="card"><div class="section-head"><h2>Recent Sales</h2><a class="btn" href="/sales">OPEN POS</a></div>{html_table(['Time','Receipt','Customer','Total','By'],[[esc(r['sold_at']),esc(r['receipt_no']),esc(r['customer']),money(r['total']),esc(r['user_name'])] for r in live['recent_sales']],'No sales yet.')}</section><section class="card"><div class="section-head"><h2>Recent Purchases</h2><a class="btn" href="/purchases">OPEN PURCHASES</a></div>{html_table(['Time','Purchase','Supplier','Total','By'],[[esc(r['purchased_at']),esc(r['purchase_no']),esc(r['supplier']),money(r['total']),esc(r['user_name'])] for r in live['recent_purchases']],'No purchases yet.')}</section></div>'''
+    content=f'''{branch_selector}<section class="card" style="margin-bottom:14px"><div class="section-head"><div><h2 style="margin:0">{esc(dashboard_greeting(u))}</h2><div class="muted">Welcome to {esc(business_name)}{(' · '+esc(branch_name)) if branch_name else ''}</div></div><span class="pill">{esc(role_display(role_name(u)))}</span></div></section><div class="grid kpis"><div class="card kpi"><div class="label">TODAY SALES</div><strong>{money(d['today_sales'])}</strong><div class="muted">{d['transactions']} transactions</div></div><div class="card kpi"><div class="label">CASH</div><strong>{money(d['cash'])}</strong></div><div class="card kpi"><div class="label">M-PESA</div><strong>{money(d['mpesa'])}</strong></div><div class="card kpi"><div class="label">TODAY EXPENSES</div><strong>{money(d['expenses'])}</strong></div><div class="card kpi"><div class="label">TODAY COGS — COST OF GOODS SOLD</div><strong>{money(d['today_cogs'])}</strong><div class="muted">Recorded cost of products sold today</div><a class="muted" href="/profit-loss?branch_id={branch_id or ''}">View COGS &amp; P&amp;L</a></div><div class="card kpi"><div class="label">TODAY GROSS PROFIT</div><strong>{money(d['today_gross_profit'])}</strong><div class="muted">Sales less COGS, before expenses</div></div><div class="card kpi"><div class="label">INVENTORY VALUE AT COST</div><strong>{money(d['stock_value'])}</strong><div class="muted">{d['stock_units']:,.0f} units in stock · current inventory cost value</div><a class="muted" href="/stock-report?branch_id={branch_id or ''}">View stock valuation</a></div><div class="card kpi"><div class="label">POTENTIAL RETAIL VALUE</div><strong>{money(d['stock_retail_value'])}</strong><div class="muted">Estimated value if all current stock sells at listed prices</div></div><div class="card kpi"><div class="label">LOW STOCK</div><strong>{live['low_stock']}</strong></div><div class="card kpi"><div class="label">ACTIVE USERS</div><strong>{live['active_users']}</strong></div></div>{cogs_status}<div class="performance-grid" style="margin-top:14px">{performance_html}</div>{awards_html}<div class="grid two" style="margin-top:14px"><section class="card"><div class="section-head"><h2>14-Day Sales Trend</h2><span class="pill">LIVE DATA</span></div>{chart}</section><section class="card"><div class="section-head"><h2>System Accountability</h2><span class="pill">SIGNED IN</span></div><div class="metric"><div class="muted">USER</div><div class="v">{esc(u['full_name'])}</div><div class="muted">@{esc(u['username'])} · {esc(role_display(role_name(u)))}</div></div><div class="metric" style="margin-top:9px"><div class="muted">SERVER TIME</div><div class="v">{now()}</div></div></section></div><div class="grid two" style="margin-top:14px"><section class="card mpesa-live-card"><div class="mpesa-live-head"><div><h2 style="margin:0">Live M-Pesa Messages</h2><div class="muted">{esc(settings.get('mpesa_shortcode',''))} · refreshes automatically</div></div><span class="pill">LIVE</span></div><div id="mpesa-live-messages">{mpesa_live_messages_html(mp_live)}</div></section><section class="card"><div class="section-head"><h2>Low Stock</h2><a class="btn" href="/stock-report">VIEW STOCK</a></div>{html_table(['Product','Stock','Reorder Level'],[[esc(p['name']),p['stock_qty'],p['reorder_level']] for p in low_stock(branch_id)],'No low-stock products.')}</section></div><div class="grid two" style="margin-top:14px"><section class="card"><div class="section-head"><h2>Recent Sales</h2><a class="btn" href="/sales">OPEN POS</a></div>{html_table(['Time','Receipt','Customer','Total','By'],[[esc(r['sold_at']),esc(r['receipt_no']),esc(r['customer']),money(r['total']),esc(r['user_name'])] for r in live['recent_sales']],'No sales yet.')}</section><section class="card"><div class="section-head"><h2>Recent Purchases</h2><a class="btn" href="/purchases">OPEN PURCHASES</a></div>{html_table(['Time','Purchase','Supplier','Total','By'],[[esc(r['purchased_at']),esc(r['purchase_no']),esc(r['supplier']),money(r['total']),esc(r['user_name'])] for r in live['recent_purchases']],'No purchases yet.')}</section></div>'''
     return layout(u,'Executive Dashboard',content,'/')
 
 
@@ -906,12 +943,15 @@ def active_user_count():
     return count
 
 
-def low_stock():
-    c=core.db.c(); rows=[dict(r) for r in c.execute('SELECT * FROM products WHERE active=1 AND stock_qty<=reorder_level ORDER BY stock_qty,name')]; c.close(); return rows
+def low_stock(branch_id=None):
+    c=core.db.c(); scope=' AND bs.branch_id=?' if branch_id is not None else ''
+    rows=[dict(r) for r in c.execute('SELECT p.*,bs.qty stock_qty,bs.reorder_level FROM products p JOIN branch_stock bs ON bs.product_id=p.id WHERE p.active=1 AND bs.qty<=bs.reorder_level'+scope+' ORDER BY bs.qty,p.name',(int(branch_id),) if branch_id is not None else ())]; c.close(); return rows
 
 
-def daily_chart():
-    c=core.db.c(); rows=c.execute("SELECT date(sold_at) day, COALESCE(SUM(total),0) revenue FROM sales WHERE substr(sold_at,1,10)>=date('now','-13 day','localtime') AND customer_type<>'CREDIT' GROUP BY date(sold_at) ORDER BY day").fetchall(); c.close()
+def daily_chart(branch_id=None):
+    scope=' AND branch_id=?' if branch_id is not None else ''
+    args=(int(branch_id),) if branch_id is not None else ()
+    c=core.db.c(); rows=c.execute("SELECT date(sold_at) day, COALESCE(SUM(total),0) revenue FROM sales WHERE substr(sold_at,1,10)>=date('now','-13 day','localtime') AND customer_type<>'CREDIT'"+scope+" GROUP BY date(sold_at) ORDER BY day",args).fetchall(); c.close()
     data=[dict(r) for r in rows]; maxv=max([float(r['revenue']) for r in data] or [1]); labels=''
     for r in data:
         h=max(2, int(float(r['revenue'])/maxv*150)); labels+=f'<div class="bar-item"><div class="bar" style="height:{h}px" title="{esc(money(r["revenue"]))}"></div><span>{esc(str(r["day"])[5:])}</span></div>'
