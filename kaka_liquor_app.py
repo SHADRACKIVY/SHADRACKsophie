@@ -401,11 +401,8 @@ def save_purchase(u, form):
     try:
         c.execute('BEGIN IMMEDIATE')
         branch_id=(u.get('branch_id') if role_name(u) not in ('ADMIN','MANAGEMENT') else (int(form.get('branch_id') or 0) or u.get('branch_id')))
-        if not branch_id and role_name(u)=='SALES': raise ValueError('Assign this Sales Person to a branch in User Management before recording purchases.')
-        if not branch_id:
-            br=c.execute('SELECT id FROM branches WHERE active=1 ORDER BY id LIMIT 1').fetchone()
-            if not br: raise ValueError('Register an active branch before recording purchases.')
-            branch_id=br['id']
+        if not branch_id and role_name(u) not in ('ADMIN','MANAGEMENT'): raise ValueError('Assign this Sales Person to a branch in User Management before recording purchases.')
+        if not branch_id and role_name(u) in ('ADMIN','MANAGEMENT'): raise ValueError('Select the receiving branch before saving this purchase.')
         if not c.execute('SELECT 1 FROM branches WHERE id=? AND active=1',(branch_id,)).fetchone(): raise ValueError('Selected branch is inactive or unavailable.')
         products={}
         for product_id,qty,cost,line_total in clean:
@@ -458,10 +455,13 @@ def save_expense(u, form):
     c=core.db.c()
     try:
         c.execute('BEGIN IMMEDIATE')
+        branch_id=(int(u.get('branch_id') or 0) if role_name(u) not in ('ADMIN','MANAGEMENT') else int(form.get('branch_id') or 0))
+        if not branch_id: raise ValueError('Select an active branch before saving expenses.')
+        if not c.execute('SELECT 1 FROM branches WHERE id=? AND active=1',(branch_id,)).fetchone(): raise ValueError('Selected branch is inactive or unavailable.')
         ts=now(); numbers=[]
         for cat,desc,amount in clean:
             no='EXP-'+dt.datetime.now().strftime('%Y%m%d%H%M%S')+'-'+secrets.token_hex(2).upper()
-            cur=c.execute('INSERT INTO expenses(expense_no,expense_date,user_id,category,description,amount,payment_method,reference) VALUES(?,?,?,?,?,?,?,?)',(no,ts,u['id'],cat,desc,amount,method,ref))
+            cur=c.execute('INSERT INTO expenses(expense_no,expense_date,user_id,category,description,amount,payment_method,reference,branch_id) VALUES(?,?,?,?,?,?,?,?,?)',(no,ts,u['id'],cat,desc,amount,method,ref,branch_id))
             core.db.audit(c,u,'CREATE','EXPENSE',cur.lastrowid,f'{no} amount={amount:.2f}')
             numbers.append(no)
         c.commit()
@@ -483,11 +483,8 @@ def save_product(u, form):
         cur=c.execute('INSERT INTO products(product_no,sku,name,category,unit,sell_price,wholesale_price,avg_cost,stock_qty,reorder_level,active,created_at,updated_at) VALUES(NULL,?,?,?,?,?,?,?,?,?,1,?,?)',(sku,name,cat,unit,sell,wholesale,avg_cost,0,reorder,ts,ts)); pid=cur.lastrowid; product_no=f'PRD-{pid:05d}'
         c.execute('UPDATE products SET product_no=? WHERE id=?',(product_no,pid))
         branch_id=(u.get('branch_id') if role_name(u) not in ('ADMIN','MANAGEMENT') else (int(form.get('branch_id') or 0) or u.get('branch_id')))
-        if not branch_id and role_name(u)=='SALES': raise ValueError('Assign this Sales Person to a branch in User Management before registering products.')
-        if not branch_id:
-            br=c.execute('SELECT id FROM branches WHERE active=1 ORDER BY id LIMIT 1').fetchone()
-            if not br: raise ValueError('Register an active branch before entering opening stock.')
-            branch_id=br['id']
+        if not branch_id and role_name(u) not in ('ADMIN','MANAGEMENT'): raise ValueError('Assign this Sales Person to a branch in User Management before registering products.')
+        if not branch_id and role_name(u) in ('ADMIN','MANAGEMENT'): raise ValueError('Select a branch for the opening stock before saving this product.')
         if not c.execute('SELECT 1 FROM branches WHERE id=? AND active=1',(branch_id,)).fetchone(): raise ValueError('Selected branch is inactive or unavailable.')
         for br in c.execute('SELECT id FROM branches WHERE active=1').fetchall():
             c.execute('INSERT OR IGNORE INTO branch_stock(branch_id,product_id,qty,avg_cost,buy_price,sell_price,wholesale_price,reorder_level,updated_at) VALUES(?,?,0,?,?,?,?,?,?)',(br['id'],pid,avg_cost,opening_cost,sell,wholesale,reorder,ts))
@@ -1164,9 +1161,14 @@ document.addEventListener('input',function(e){{if(e.target.closest&&e.target.clo
 def expense_page(u, message='', query=None):
     require_perm_user(u,'RECORD_EXPENSE')
     fd,ft,td,tt,preset=period_from_query(query or {})
-    start=f'{fd} {ft}:00'; end=f'{td} {tt}:59'
-    rows=core.expense_report_data(start,end)
+    start=f'{fd} {ft}:00'; end=f'{td} {tt}:59'; branch_id=branch_scope_for(u,query)
+    rows=core.expense_report_data(start,end,branch_id)
     notice=f'<div class="flash error">{esc(message)}</div>' if message else ''
+    branch_opts=''
+    if role_name(u) in ('ADMIN','MANAGEMENT'):
+        c=core.db.c(); brs=[dict(b) for b in c.execute('SELECT id,name FROM branches WHERE active=1 ORDER BY name').fetchall()]; c.close()
+        branch_opts='<div><label>Branch *</label><select name="branch_id" required><option value="">Select branch</option>'+''.join(f'<option value="{b["id"]}">{esc(b["name"])}</option>' for b in brs)+'</select></div>'
+    else: branch_opts=f'<input type="hidden" name="branch_id" value="{int(u.get("branch_id") or 0)}">'
     if role_name(u)=='ADMIN':
         expense_rows=[]
         for r in rows:
@@ -1178,7 +1180,7 @@ def expense_page(u, message='', query=None):
     else:
         report_table=html_table(['Date & Time','Expense','Category','Description','Amount','Payment','Reference','Recorded By'],[[esc(r['expense_date']),esc(r['expense_no']),esc(r['category']),esc(r['description']),money(r['amount']),esc(r['payment_method']),esc(r['reference'] or ''),esc(r['attended_by'])] for r in rows],'No expenses for selected period.')
     exp=f'/report/export?kind=expenses&format={{fmt}}&start={esc(start)}&end={esc(end)}'
-    content=f'''{notice}<section class="card"><div class="section-head"><h2>Business Expenses</h2><span class="pill">ACCOUNTABLE: {esc(u['full_name'])}</span></div><form method="post" action="/expenses">{csrf_input(CURRENT_HANDLER)}<input type="hidden" id="expense_line_count" name="expense_line_count" value="1"><div class="form-grid"><div><label>Payment</label><select name="payment_method"><option>Cash</option><option>M-Pesa</option><option>Bank</option></select></div><div><label>Reference / Receipt No.</label><input name="reference"></div></div><div class="section-head" style="margin-top:14px"><h3>Expense items</h3><button type="button" class="btn" onclick="addExpenseLine()">+ ADD LINE</button></div><div id="expense_lines"><div class="form-grid expense-line" style="border:1px solid var(--line);padding:10px;border-radius:10px;margin-bottom:8px"><div><label>Category *</label><select name="category_1" required><option>Rent</option><option>Utilities</option><option>Wages</option><option>Transport</option><option>Licensing</option><option>Repairs</option><option>Security</option><option>Marketing</option><option>Bank Charges</option><option>Other</option></select></div><div><label>Description *</label><input name="description_1" required></div><div><label>Amount (KES) *</label><input type="number" name="amount_1" min="0.01" step="0.01" required></div></div></div><div class="actions" style="margin-top:14px"><button class="btn gold" type="submit">SAVE EXPENSES</button><button class="btn" type="reset">CLEAR</button></div><script>
+    content=f'''{notice}<section class="card"><div class="section-head"><h2>Business Expenses</h2><span class="pill">ACCOUNTABLE: {esc(u['full_name'])}</span></div><form method="post" action="/expenses">{csrf_input(CURRENT_HANDLER)}{branch_opts}<input type="hidden" id="expense_line_count" name="expense_line_count" value="1"><div class="form-grid"><div><label>Payment</label><select name="payment_method"><option>Cash</option><option>M-Pesa</option><option>Bank</option></select></div><div><label>Reference / Receipt No.</label><input name="reference"></div></div><div class="section-head" style="margin-top:14px"><h3>Expense items</h3><button type="button" class="btn" onclick="addExpenseLine()">+ ADD LINE</button></div><div id="expense_lines"><div class="form-grid expense-line" style="border:1px solid var(--line);padding:10px;border-radius:10px;margin-bottom:8px"><div><label>Category *</label><select name="category_1" required><option>Rent</option><option>Utilities</option><option>Wages</option><option>Transport</option><option>Licensing</option><option>Repairs</option><option>Security</option><option>Marketing</option><option>Bank Charges</option><option>Other</option></select></div><div><label>Description *</label><input name="description_1" required></div><div><label>Amount (KES) *</label><input type="number" name="amount_1" min="0.01" step="0.01" required></div></div></div><div class="actions" style="margin-top:14px"><button class="btn gold" type="submit">SAVE EXPENSES</button><button class="btn" type="reset">CLEAR</button></div><script>
 function addExpenseLine(){{var box=document.getElementById('expense_lines'),first=box.querySelector('.expense-line'),n=Number(document.getElementById('expense_line_count').value||1)+1,row=first.cloneNode(true);document.getElementById('expense_line_count').value=n;row.querySelectorAll('[name],[id]').forEach(function(e){{if(e.name)e.name=e.name.replace(/_\\d+$/,'_'+n);if(e.id)e.id=e.id.replace(/_\\d+$/,'_'+n)}});row.querySelectorAll('input').forEach(function(e){{e.value=''}});box.appendChild(row)}}
 </script></form></section></section><section class="card" style="margin-top:14px"><div class="section-head"><h2>Expense Report</h2><span class="pill">{esc(preset)}</span></div>{range_toolbar('/expenses',fd,ft,td,tt)}<div class="actions" style="margin-top:10px"><button type="button" class="btn" onclick="window.print()">PRINT REPORT</button><a class="btn" href="{exp.format(fmt='pdf')}">DOWNLOAD PDF</a><a class="btn" href="{exp.format(fmt='xlsx')}">DOWNLOAD EXCEL</a></div><div class="report-print">{report_table}</div></section>'''
     return layout(u,'Expenses',content,'/expenses','Expense entry and expense reporting')
