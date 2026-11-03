@@ -143,16 +143,19 @@ def business_logo_bytes():
     return LOGO.encode('utf-8'), 'image/svg+xml'
 
 
-SCANNER_MODAL = '<div id="scanner_modal" class="scanner-modal"><div class="scanner-box"><div class="section-head"><h3>Scan Product</h3><button class="btn" type="button" onclick="closeScanner()">CLOSE</button></div><video id="scanner_video" playsinline muted></video><div id="scanner_status" class="scanner-status">Point the camera at a barcode…</div></div></div>'
-
+SCANNER_MODAL = ''
 SCANNER_JS = r"""
-window.scannerBeep=function(){try{var AC=window.AudioContext||window.webkitAudioContext;if(!AC)return;var ctx=new AC();var osc=ctx.createOscillator(),gain=ctx.createGain();osc.type='sine';osc.frequency.value=880;gain.gain.setValueAtTime(0.0001,ctx.currentTime);gain.gain.exponentialRampToValueAtTime(0.16,ctx.currentTime+0.01);gain.gain.exponentialRampToValueAtTime(0.0001,ctx.currentTime+0.13);osc.connect(gain);gain.connect(ctx.destination);osc.start();osc.stop(ctx.currentTime+0.14);setTimeout(function(){try{ctx.close()}catch(e){}},250);}catch(e){}};
-window.lookupProductBySku=function(inputId){var q=document.getElementById(inputId),sel=document.getElementById('sale_product');if(!q||!sel)return;var term=(q.value||'').trim().toLowerCase();if(!term){alert('Enter or scan an SKU.');return;}var found=false;var productLabel='';Array.from(sel.options).forEach(function(o){if(String(o.getAttribute('data-sku')||'').toLowerCase()===term){sel.value=o.value;found=true;productLabel=o.textContent||'';}});if(found){window.scannerBeep();if(window.showRegisteredPrice)window.showRegisteredPrice();var st=document.getElementById('scanner_status');if(st)st.textContent='Product scanned: '+productLabel;q.value='';}else alert('Product SKU not found. Register the product first.');};
-window.lookupGenericSku=function(inputId,selectId){var q=document.getElementById(inputId),sel=document.getElementById(selectId);if(!q||!sel)return;var term=(q.value||'').trim().toLowerCase();if(!term){alert('Enter or scan an SKU.');return;}var found=false;Array.from(sel.options).forEach(function(o){if(String(o.getAttribute('data-sku')||'').toLowerCase()===term){sel.value=o.value;found=true;}});if(found){window.scannerBeep();q.value='';}else alert('Product SKU not found. Register the product first.');};
-window.closeScanner=function(){var modal=document.getElementById('scanner_modal'),video=document.getElementById('scanner_video');try{if(video&&video.srcObject){video.srcObject.getTracks().forEach(function(t){t.stop()});video.srcObject=null;}}catch(e){}if(modal)modal.classList.remove('open');};
-window.openScanner=function(targetId){var modal=document.getElementById('scanner_modal'),video=document.getElementById('scanner_video'),status=document.getElementById('scanner_status'),target=document.getElementById(targetId);if(!modal||!video||!target){alert('Scanner is unavailable.');return;}if(!('BarcodeDetector' in window)){alert('Camera scanning is not supported by this browser. Use a USB/Bluetooth scanner or type the SKU.');return;}if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){alert('Camera access is unavailable. Use a scanner or type the SKU.');return;}modal.classList.add('open');status.textContent='Point the camera at the product barcode…';navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}}}).then(function(stream){video.srcObject=stream;video.play();var detector=new BarcodeDetector({formats:['ean_13','ean_8','upc_a','upc_e','code_128','code_39','qr_code']});function loop(){if(!modal.classList.contains('open'))return;detector.detect(video).then(function(codes){if(codes.length&&codes[0].rawValue){target.value=codes[0].rawValue;window.scannerBeep();status.textContent='Barcode scanned: '+codes[0].rawValue;setTimeout(function(){window.closeScanner();if(targetId==='sales_sku_scan')window.lookupProductBySku(targetId);else if(targetId==='purchase_sku_scan')window.lookupGenericSku(targetId,'purchase_product_id');},120);return;}requestAnimationFrame(loop);}).catch(function(){requestAnimationFrame(loop);});}requestAnimationFrame(loop);}).catch(function(){status.textContent='Camera could not be opened. You can type/scan the SKU instead.';});};
-window.openScannerFill=function(targetId){window.openScanner(targetId);};
-"""
+window.filterProductOptions=function(input){
+  var picker=input.closest('.product-picker');
+  if(!picker)return;
+  var select=picker.querySelector('select');
+  if(!select)return;
+  var term=(input.value||'').trim().toLowerCase();
+  Array.from(select.options).forEach(function(option,index){
+    option.hidden=!!term && index>0 && !(option.textContent||'').toLowerCase().includes(term);
+  });
+};
+""" 
 
 def page_link(label, href, active=''):
     cls = 'active' if href == active else ''
@@ -308,11 +311,11 @@ def layout(u, title, content, active='', subtitle='Business control center'):
     if role in ('ADMIN','MANAGEMENT'): branch=''
     elif u.get('branch_id'):
         c=core.db.c(); br=c.execute('SELECT name FROM branches WHERE id=? AND active=1',(int(u['branch_id']),)).fetchone(); c.close(); branch=br['name'] if br else ''
-    nav=([(setting_label('nav_dashboard','Dashboard'),'/')] if dashboard_enabled and allowed(u,'VIEW_DASHBOARD') else [])+[(setting_label('nav_sales','Sales / POS'),'/sales')]+([(setting_label('nav_sales_dashboard','Sales Dashboard'),'/sales-dashboard')] if dashboard_enabled and allowed(u,'VIEW_DASHBOARD') else [])+[(setting_label('nav_purchases','Purchases'),'/purchases'),(setting_label('nav_expenses','Expenses'),'/expenses'),(setting_label('nav_customers','Customers / Credit'),'/customers'),(setting_label('nav_reports','Reports'),'/reports'),(setting_label('nav_stock_report','Stock Report'),'/stock-report'),('Stock Transfers / Stock Count','/stock-transfers'),(setting_label('nav_reorder_report','Reorder Report'),'/reorder-report'),(setting_label('nav_live','Live Monitoring'),'/live'),(setting_label('nav_products','Product Registration'),'/products'),('MONTEZ LIQUOR AI Assistant','/ai')]
+    nav=([(setting_label('nav_dashboard','Dashboard'),'/')] if dashboard_enabled and allowed(u,'VIEW_DASHBOARD') else [])+[(setting_label('nav_sales','Sales / POS'),'/sales')]+([(setting_label('nav_sales_dashboard','Sales Dashboard'),'/sales-dashboard')] if dashboard_enabled and allowed(u,'VIEW_DASHBOARD') else [])+[(setting_label('nav_purchases','Purchases'),'/purchases'),('Suppliers','/suppliers'),(setting_label('nav_expenses','Expenses'),'/expenses'),(setting_label('nav_customers','Customers / Credit'),'/customers'),(setting_label('nav_reports','Reports'),'/reports'),(setting_label('nav_stock_report','Stock Report'),'/stock-report'),('Stock Transfers / Stock Count','/stock-transfers'),(setting_label('nav_reorder_report','Reorder Report'),'/reorder-report'),(setting_label('nav_live','Live Monitoring'),'/live'),(setting_label('nav_products','Product Registration'),'/products'),('MONTEZ LIQUOR AI Assistant','/ai')]
     if role=='ADMIN':
         nav += [('Branch Registration','/branches'),('Branch Performance','/branch-performance'),('Cash & Paybill Statements','/financials'),(setting_label('nav_users','User Management'),'/users'),(setting_label('nav_settings','Settings'),'/settings'),('M-Pesa Monitor','/mpesa/monitor'),('Payment Recovery','/mpesa/recovery'),(setting_label('nav_ledger','Ledger & P&L'),'/ledger'),(setting_label('nav_profit_loss','Profit & Loss'),'/profit-loss'),(setting_label('nav_expense_report','Expense Report'),'/expense-report'),(setting_label('nav_backup','Backup'),'/backup'),(setting_label('nav_audit','Audit Log'),'/audit')]
     else:
-        perm_map={'/':'VIEW_DASHBOARD','/sales':'CREATE_SALE','/sales-dashboard':'VIEW_DASHBOARD','/purchases':'CREATE_PURCHASE','/expenses':'RECORD_EXPENSE','/customers':'MANAGE_CUSTOMERS','/reports':'VIEW_REPORTS','/stock-report':'VIEW_STOCK','/reorder-report':'VIEW_STOCK','/live':'LIVE_MONITORING','/products':'MANAGE_PRODUCTS','/ai':'AI_ASSISTANT','/expense-report':'VIEW_REPORTS','/ledger':'VIEW_LEDGER','/profit-loss':'VIEW_LEDGER'}
+        perm_map={'/':'VIEW_DASHBOARD','/sales':'CREATE_SALE','/sales-dashboard':'VIEW_DASHBOARD','/purchases':'CREATE_PURCHASE','/suppliers':'CREATE_PURCHASE','/expenses':'RECORD_EXPENSE','/customers':'MANAGE_CUSTOMERS','/reports':'VIEW_REPORTS','/stock-report':'VIEW_STOCK','/reorder-report':'VIEW_STOCK','/live':'LIVE_MONITORING','/products':'MANAGE_PRODUCTS','/ai':'AI_ASSISTANT','/expense-report':'VIEW_REPORTS','/ledger':'VIEW_LEDGER','/profit-loss':'VIEW_LEDGER'}
         if role=='MANAGEMENT': perm_map['/stock-transfers']='VIEW_STOCK'
         nav=[(label,href) for label,href in nav if perm_map.get(href) and allowed(u,perm_map[href])]
         if role=='MANAGEMENT':
@@ -403,10 +406,11 @@ def _indexed_lines(form, prefix, fields, minimum=1):
 
 def save_purchase(u, form):
     supplier=form.get('supplier','').strip()
+    supplier_id=int(form.get('supplier_id','0') or 0)
     method=form.get('payment_method','Cash')
     ref=form.get('reference','').strip()
-    if not supplier:
-        raise ValueError('Supplier is required.')
+    if not supplier and not supplier_id:
+        raise ValueError('Select a registered supplier.')
     if method not in ('Cash','M-Pesa','Credit'):
         raise ValueError('Invalid payment method.')
     if method=='M-Pesa' and not ref:
@@ -436,6 +440,11 @@ def save_purchase(u, form):
         if not branch_id and role_name(u) not in ('ADMIN','MANAGEMENT'): raise ValueError('Assign this Sales Person to a branch in User Management before recording purchases.')
         if not branch_id and role_name(u) in ('ADMIN','MANAGEMENT'): raise ValueError('Select the receiving branch before saving this purchase.')
         if not c.execute('SELECT 1 FROM branches WHERE id=? AND active=1',(branch_id,)).fetchone(): raise ValueError('Selected branch is inactive or unavailable.')
+        if supplier_id:
+            supplier_row=c.execute('SELECT name,branch_id FROM suppliers WHERE id=? AND active=1',(supplier_id,)).fetchone()
+            if not supplier_row: raise ValueError('Selected supplier is inactive or unavailable. Register or restore the supplier first.')
+            if int(supplier_row['branch_id'])!=int(branch_id): raise ValueError('The selected supplier is not registered for the receiving branch.')
+            supplier=str(supplier_row['name'])
         products={}
         for product_id,qty,cost,line_total in clean:
             p=c.execute('SELECT * FROM products WHERE id=? AND active=1',(product_id,)).fetchone()
@@ -506,8 +515,10 @@ def save_expense(u, form):
 
 
 def save_product(u, form):
-    sku=form.get('sku','').strip(); name=form.get('name','').strip(); cat=form.get('category','').strip(); unit=form.get('unit','bottle').strip(); sell=float(form.get('sell_price','0') or 0); wholesale=float(form.get('wholesale_price',form.get('sell_price','0')) or 0); stock=float(form.get('stock_qty','0') or 0); opening_cost=float(form.get('cogs_unit_cost', form.get('opening_unit_cost','0')) or 0); reorder=float(form.get('reorder_level','5') or 5)
-    if not sku or not name or not cat or sell<=0 or wholesale<=0 or stock<0 or opening_cost<0 or reorder<0: raise ValueError('Complete the product details with valid non-negative amounts.')
+    name=form.get('name','').strip(); cat=form.get('category','').strip(); unit=form.get('unit','bottle').strip(); sell=float(form.get('sell_price','0') or 0); wholesale=float(form.get('wholesale_price',form.get('sell_price','0')) or 0); stock=float(form.get('stock_qty','0') or 0); opening_cost=float(form.get('cogs_unit_cost', form.get('opening_unit_cost','0')) or 0); reorder=float(form.get('reorder_level','5') or 5)
+    if not name or not cat or sell<=0 or wholesale<=0 or stock<0 or opening_cost<0 or reorder<0: raise ValueError('Complete the product details with valid non-negative amounts.')
+    # Legacy schema compatibility only: SKU is no longer shown, entered or used by staff.
+    sku='INTERNAL-'+secrets.token_hex(8).upper()
     if stock>0 and opening_cost<=0: raise ValueError('COGS / unit cost must be greater than zero when opening stock is entered. This is required for correct COGS.')
     c=core.db.c(); c.execute('BEGIN')
     try:
@@ -531,14 +542,14 @@ def save_product(u, form):
 
 def admin_update_product(u, form):
     if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
-    pid=int(form.get('product_id','0') or 0); sku=form.get('sku','').strip(); name=form.get('name','').strip(); cat=form.get('category','').strip(); unit=form.get('unit','bottle').strip(); sell=float(form.get('sell_price','0') or 0); wholesale=float(form.get('wholesale_price',form.get('sell_price','0')) or 0); reorder=float(form.get('reorder_level','5') or 5); reason=form.get('reason','').strip()
+    pid=int(form.get('product_id','0') or 0); name=form.get('name','').strip(); cat=form.get('category','').strip(); unit=form.get('unit','bottle').strip(); sell=float(form.get('sell_price','0') or 0); wholesale=float(form.get('wholesale_price',form.get('sell_price','0')) or 0); reorder=float(form.get('reorder_level','5') or 5); reason=form.get('reason','').strip()
     if not reason: reason='Administrator product edit'
-    if pid<=0 or not sku or not name or not cat or sell<=0 or wholesale<=0 or reorder<0: raise ValueError('Complete the product details with positive retail and wholesale prices.')
+    if pid<=0 or not name or not cat or sell<=0 or wholesale<=0 or reorder<0: raise ValueError('Complete the product details with positive retail and wholesale prices.')
     c=core.db.c()
     try:
         p=c.execute('SELECT * FROM products WHERE id=?',(pid,)).fetchone()
         if not p: raise ValueError('Product not found.')
-        ts=now(); c.execute('UPDATE products SET sku=?,name=?,category=?,unit=?,sell_price=?,wholesale_price=?,reorder_level=?,updated_at=? WHERE id=?',(sku,name,cat,unit,sell,wholesale,reorder,ts,pid)); core.db.audit(c,u,'UPDATE','PRODUCT',pid,f'Edited {p["product_no"] or pid}; retail_price={sell:.2f}; wholesale_price={wholesale:.2f}; reorder={reorder}; reason={reason}'); c.commit()
+        ts=now(); c.execute('UPDATE products SET name=?,category=?,unit=?,sell_price=?,wholesale_price=?,reorder_level=?,updated_at=? WHERE id=?',(name,cat,unit,sell,wholesale,reorder,ts,pid)); core.db.audit(c,u,'UPDATE','PRODUCT',pid,f'Edited {p["product_no"] or pid}; retail_price={sell:.2f}; wholesale_price={wholesale:.2f}; reorder={reorder}; reason={reason}'); c.commit()
     except Exception:
         c.rollback(); raise
     finally: c.close()
@@ -1187,7 +1198,7 @@ def sales_page(u, message='', search_query='', search_results=None, selected_cus
     max_payments=max(1,min(5,int(float(core.get_setting('max_payment_transactions','5')))))
     default_payment_count=max(1,min(max_payments,int(float(core.get_setting('default_payment_transactions','1')))))
     ps=core.products(branch_id) if branch_id is not None else []
-    product_opts=''.join(f'<option value="{p["id"]}" data-retail-price="{float(p["sell_price"]):.2f}" data-wholesale-price="{float(p.get('wholesale_price') or p['sell_price']):.2f}" data-sku="{esc(p.get("sku",""))}">{esc(p["name"])} · Retail {money(p["sell_price"])} / Wholesale {money(p.get('wholesale_price') or p['sell_price'])} · Stock {p["stock_qty"]}</option>' for p in ps) or '<option value="">No products registered</option>'
+    product_opts=''.join(f'<option value="{p["id"]}" data-retail-price="{float(p["sell_price"]):.2f}" data-wholesale-price="{float(p.get('wholesale_price') or p['sell_price']):.2f}">{esc(p["name"])} · Retail {money(p["sell_price"])} / Wholesale {money(p.get('wholesale_price') or p['sell_price'])} · Stock {p["stock_qty"]}</option>' for p in ps) or '<option value="">No products registered</option>'
     bid=branch_scope_for(u); c=core.db.c(); sale_scope=' WHERE s.branch_id=?' if bid is not None else ''; sale_args=(int(bid),) if bid is not None else ()
     rows=c.execute("SELECT s.receipt_no,s.sold_at,s.customer_type,s.sale_type,s.total,s.branch_id,COALESCE(cu.full_name,'Walk-in Customer') customer,COALESCE(u.full_name,'') user_name FROM sales s LEFT JOIN customers cu ON cu.id=s.customer_id LEFT JOIN users u ON u.id=s.user_id"+sale_scope+" ORDER BY s.id DESC LIMIT 100",sale_args).fetchall(); c.close()
     payments='''<div class="pay-line" id="payment_row_1"><div><label>Method</label><select name="payment_method_1" id="payment_method_1" onchange="toggleMpesa(1)"><option value="CASH">CASH</option><option value="MPESA">M-PESA</option></select></div><div><label>Amount</label><input type="number" min="0.01" step="0.01" name="payment_amount_1" id="payment_amount_1" value="0" oninput="updatePaymentSummary()" required></div><div id="mpesa_wrap_1" style="display:none"><label>Customer M-Pesa Phone</label><input name="mpesa_phone_1" id="mpesa_phone_1" placeholder="0712345678" inputmode="tel"><button type="button" class="btn" onclick="requestMpesa(1)" id="mpesa_request_1">SEND M-PESA PROMPT</button><button type="button" class="btn" onclick="confirmDirectMpesa(1)" id="mpesa_confirm_1">CONFIRM PAYMENT</button><label for="mpesa_code_1">M-Pesa Transaction Code / Receipt Number *</label><input type="text" name="mpesa_code_1" id="mpesa_code_1" placeholder="e.g. QWE123ABC9" maxlength="30" autocomplete="off" autocapitalize="characters" spellcheck="false"><div class="muted" id="mpesa_status_1">For Till/Paybill payments, enter the code from the customer M-Pesa SMS. STK Push can fill it automatically.</div></div></div>'''
@@ -1222,7 +1233,7 @@ __BRANCH_FIELD__
 <input type="hidden" name="customer_id" id="selected_customer_id" value="__SELECTED_CUSTOMER_ID__"><input type="hidden" name="mpesa_batch_id" id="mpesa_batch_id" value="">
 <div>
 <section class="card"><div class="section-head"><h2>New Sale</h2><span class="pill">ATTENDED BY: __FULL_NAME__</span></div>
-<div class="form-grid"><div><label>Sale Type</label><select name="sale_type" id="sale_type" onchange="showRegisteredPrice()"><option value="RETAIL">RETAIL</option><option value="WHOLESALE">WHOLESALE</option></select></div></div><div class="section-head" style="margin-top:12px"><h3>Products in this sale</h3><button type="button" class="btn gold" onclick="addSaleLine()">+ ADD LINE</button></div><div id="sale_lines"><div class="form-grid sale-line" style="border:1px solid var(--line);padding:10px;border-radius:10px;margin-bottom:8px"><div><label>Product</label><select name="product_id_1" id="sale_product_1" class="sale-product" required onchange="showRegisteredPrice()">__PRODUCT_OPTS__</select></div><div><label>Quantity</label><input type="number" name="qty_1" id="sale_qty_1" class="sale-qty" min="1" step="1" value="1" required oninput="showRegisteredPrice()"></div><div><label>Registered unit price</label><input id="registered_price_display_1" class="locked-price sale-price" readonly></div><div><label>Line total</label><input id="line_total_1" class="locked-price sale-line-total" readonly><button type="button" class="btn" onclick="removeSaleLine(this)">REMOVE LINE</button></div></div></div><input id="sales_sku_scan" placeholder="Scan/type SKU, then look up" style="margin-top:7px"><button type="button" class="btn" style="margin-top:7px" onclick="lookupProductBySku('sales_sku_scan')">LOOK UP SKU</button><div class="sale-total-bar"><span>SALE TOTAL</span><strong id="sale_total_display">KSh 0.00</strong></div></section>
+<div class="form-grid"><div><label>Sale Type</label><select name="sale_type" id="sale_type" onchange="showRegisteredPrice()"><option value="RETAIL">RETAIL</option><option value="WHOLESALE">WHOLESALE</option></select></div></div><div class="section-head" style="margin-top:12px"><h3>Products in this sale</h3><button type="button" class="btn gold" onclick="addSaleLine()">+ ADD LINE</button></div><div id="sale_lines"><div class="form-grid sale-line" style="border:1px solid var(--line);padding:10px;border-radius:10px;margin-bottom:8px"><div class="product-picker"><label>Search all products</label><input type="search" class="product-search" placeholder="Type product name..." oninput="filterProductOptions(this)"><label>Product</label><select name="product_id_1" id="sale_product_1" class="sale-product" required onchange="showRegisteredPrice()">__PRODUCT_OPTS__</select></div><div><label>Quantity</label><input type="number" name="qty_1" id="sale_qty_1" class="sale-qty" min="1" step="1" value="1" required oninput="showRegisteredPrice()"></div><div><label>Registered unit price</label><input id="registered_price_display_1" class="locked-price sale-price" readonly></div><div><label>Line total</label><input id="line_total_1" class="locked-price sale-line-total" readonly><button type="button" class="btn" onclick="removeSaleLine(this)">REMOVE LINE</button></div></div></div><div class="sale-total-bar"><span>SALE TOTAL</span><strong id="sale_total_display">KSh 0.00</strong></div></section>
 <section class="card" style="margin-top:14px"><div class="section-head"><h2>Customer</h2><span class="pill">WALK-IN OR CREDIT CUSTOMER</span></div>
 <div class="form-grid"><div><label>Customer Type</label><select name="customer_mode" id="customer_mode" onchange="toggleCustomerMode()"><option value="WALK_IN">WALK-IN CUSTOMER</option>__CREDIT_OPTION__</select></div></div>
 <div id="credit_customer_panel" style="display:none;margin-top:14px"><div class="segmented"><label><input type="radio" name="credit_customer_choice" value="NEW" checked onchange="toggleCreditChoice()"> NEW CREDIT CUSTOMER</label><label><input type="radio" name="credit_customer_choice" value="EXISTING" onchange="toggleCreditChoice()"> EXISTING CUSTOMER</label></div>
@@ -1363,8 +1374,94 @@ def ai_page(u,message=''):
     return layout(u,'MONTEZ LIQUOR AI Assistant',content,'/ai','Business assistant for all enabled roles')
 
 
+
+def save_supplier(u, form):
+    require_perm_user(u,'CREATE_PURCHASE')
+    name=str(form.get('name','') or '').strip()
+    contact=str(form.get('contact_person','') or '').strip()
+    phone=str(form.get('phone','') or '').strip()
+    email=str(form.get('email','') or '').strip()
+    notes=str(form.get('notes','') or '').strip()
+    if not name:
+        raise ValueError('Supplier name is required.')
+    if role_name(u) in ('ADMIN','MANAGEMENT'):
+        branch_id=int(form.get('branch_id','0') or 0)
+    else:
+        branch_id=int(u.get('branch_id') or 0)
+    if not branch_id:
+        raise ValueError('Select a branch for this supplier.')
+    c=core.db.c()
+    try:
+        c.execute('BEGIN IMMEDIATE')
+        if not c.execute('SELECT 1 FROM branches WHERE id=? AND active=1',(branch_id,)).fetchone():
+            raise ValueError('Selected branch is inactive or unavailable.')
+        duplicate=c.execute('SELECT id FROM suppliers WHERE branch_id=? AND lower(name)=lower(?) AND active=1',(branch_id,name)).fetchone()
+        if duplicate:
+            raise ValueError('This supplier is already registered in the selected branch.')
+        cur=c.execute('INSERT INTO suppliers(branch_id,name,contact_person,phone,email,notes,active,created_at,updated_at,created_by) VALUES(?,?,?,?,?,?,1,?,?,?)',(branch_id,name,contact,phone,email,notes,now(),now(),u['id']))
+        core.db.audit(c,u,'CREATE','SUPPLIER',cur.lastrowid,f'{name}; branch={branch_id}; phone={phone}')
+        c.commit()
+        return cur.lastrowid
+    except Exception:
+        c.rollback()
+        raise
+    finally:
+        c.close()
+
+
+def archive_supplier(u, form, restore=False):
+    if role_name(u) not in ('ADMIN','MANAGEMENT'):
+        raise PermissionError('Only Management or Administrator can archive or restore suppliers.')
+    sid=int(form.get('supplier_id','0') or 0)
+    reason=str(form.get('reason','') or '').strip()
+    if sid<=0:
+        raise ValueError('Select a supplier.')
+    c=core.db.c()
+    try:
+        row=c.execute('SELECT * FROM suppliers WHERE id=?',(sid,)).fetchone()
+        if not row:
+            raise ValueError('Supplier not found.')
+        c.execute('UPDATE suppliers SET active=?,updated_at=? WHERE id=?',(0 if not restore else 1,now(),sid))
+        core.db.audit(c,u,'RESTORE' if restore else 'ARCHIVE','SUPPLIER',sid,f'{row["name"]}; reason={reason or "Management supplier maintenance"}')
+        c.commit()
+    finally:
+        c.close()
+
+
+def suppliers_page(u, message='', query=None):
+    require_perm_user(u,'CREATE_PURCHASE')
+    role=role_name(u)
+    branch_id=branch_scope_for(u,query)
+    c=core.db.c()
+    branches=[dict(r) for r in c.execute('SELECT id,name FROM branches WHERE active=1 ORDER BY name').fetchall()]
+    sql='SELECT s.*,b.name branch_name FROM suppliers s JOIN branches b ON b.id=s.branch_id'
+    args=()
+    if branch_id is not None:
+        sql+=' WHERE s.branch_id=?'; args=(int(branch_id),)
+    sql+=' ORDER BY s.active DESC,s.name'
+    rows=[dict(r) for r in c.execute(sql,args).fetchall()]
+    c.close()
+    notice=f'<div class="flash error">{esc(message)}</div>' if message else ''
+    if role in ('ADMIN','MANAGEMENT'):
+        branch_opts='<option value="">Select supplier branch</option>'+''.join(f'<option value="{b["id"]}" {"selected" if branch_id==int(b["id"]) else ""}>{esc(b["name"])}</option>' for b in branches)
+        branch_field=f'<div><label>Branch *</label><select name="branch_id" required>{branch_opts}</select></div>'
+    else:
+        branch_field=f'<input type="hidden" name="branch_id" value="{int(u.get("branch_id") or 0)}"><div><label>Assigned Branch</label><input value="{esc(next((b["name"] for b in branches if int(b["id"])==int(u.get("branch_id") or 0)),"Assigned Branch"))}" disabled></div>'
+    supplier_rows=[]
+    for row in rows:
+        actions=''
+        if role in ('ADMIN','MANAGEMENT'):
+            action='restore' if not row['active'] else 'archive'
+            label='RESTORE' if not row['active'] else 'ARCHIVE'
+            actions=f'<form method="post" action="/suppliers" class="inline-actions" onsubmit="return confirm("Update this supplier status?")">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="{action}"><input type="hidden" name="supplier_id" value="{row["id"]}"><input name="reason" placeholder="Reason (optional)"><button class="btn">{label}</button></form>'
+        supplier_rows.append([esc(row['name']),esc(row['branch_name']),esc(row['contact_person'] or '—'),esc(row['phone'] or '—'),esc(row['email'] or '—'),'ACTIVE' if row['active'] else 'ARCHIVED',actions])
+    table=html_table(['Supplier','Branch','Contact Person','Phone','Email','Status','Actions'],supplier_rows,'No suppliers registered yet.')
+    content=f'''{notice}<section class="card"><div class="section-head"><h2>Supplier Registration</h2><span class="pill">{esc(role_display(role))}</span></div><p class="muted">Register each supplier once. Purchases will use this saved supplier list, filtered to the receiving branch.</p><form method="post" action="/suppliers">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="create"><div class="form-grid">{branch_field}<div><label>Supplier / Company Name *</label><input name="name" required></div><div><label>Contact Person</label><input name="contact_person"></div><div><label>Phone</label><input name="phone" inputmode="tel"></div><div><label>Email</label><input type="email" name="email"></div><div><label>Notes</label><input name="notes"></div></div><button class="btn gold" style="margin-top:12px">SAVE SUPPLIER</button></form></section><section class="card" style="margin-top:14px"><h3>Registered Suppliers</h3>{table}</section>'''
+    return layout(u,'Suppliers',content,'/suppliers','Saved supplier directory for purchases')
+
+
 def purchase_page(u, message='', query=None):
-    require_perm_user(u,'CREATE_PURCHASE'); branch_id=branch_scope_for(u,query); ps=core.products(branch_id); opts=''.join(f'<option value="{p["id"]}" data-sku="{esc(p.get("sku",""))}">{esc(p["name"])} · Stock {p["stock_qty"]}</option>' for p in ps) or '<option value="">No products registered</option>'
+    require_perm_user(u,'CREATE_PURCHASE'); branch_id=branch_scope_for(u,query); ps=core.products(branch_id); opts=''.join(f'<option value="{p["id"]}">{esc(p["name"])} · Stock {p["stock_qty"]}</option>' for p in ps) or '<option value="">No products registered</option>'
     c=core.db.c(); branches=[dict(b) for b in c.execute('SELECT id,name FROM branches WHERE active=1 ORDER BY name').fetchall()]; purchase_sql='SELECT pu.id purchase_id,pu.purchase_no,pu.purchased_at,pu.supplier,pu.total,pu.payment_method,pu.reference,pu.branch_id,u.full_name,p.name product,pl.product_id,pl.qty,pl.unit_cost FROM purchases pu JOIN purchase_lines pl ON pl.purchase_id=pu.id JOIN products p ON p.id=pl.product_id JOIN users u ON u.id=pu.user_id'
     if branch_id is not None: rows=c.execute(purchase_sql+' WHERE pu.branch_id=? ORDER BY pu.id DESC LIMIT 100',(int(branch_id),)).fetchall()
     else: rows=c.execute(purchase_sql+' ORDER BY pu.id DESC LIMIT 100').fetchall()
@@ -1386,9 +1483,16 @@ def purchase_page(u, message='', query=None):
         purchases_table=html_table(['Date & Time','Purchase','Supplier','Product','Qty','Unit Cost','Total','Payment','By','Admin Actions'],purchase_rows)
     else:
         purchases_table=html_table(['Date & Time','Purchase','Supplier','Product','Qty','Unit Cost','Total','Payment','By'],[[esc(r['purchased_at']),esc(r['purchase_no']),esc(r['supplier']),esc(r['product']),r['qty'],money(r['unit_cost']),money(r['total']),esc(r['payment_method']),esc(r['full_name'])] for r in rows])
-    content=f'''{purchase_selector}{notice}<section class="card"><div class="section-head"><h2>New Purchase / Stock In</h2><span class="pill">RECORDED BY {esc(u['full_name'])}</span></div><form method="post" action="/purchases">{csrf_input(CURRENT_HANDLER)}<input type="hidden" id="purchase_line_count" name="purchase_line_count" value="1"><div class="form-grid">{purchase_branch_field}<div><label>Supplier *</label><input name="supplier" required></div><div><label>Payment *</label><select name="payment_method"><option>Cash</option><option>M-Pesa</option><option>Credit</option></select></div><div><label>Reference / M-Pesa Code</label><input name="reference"></div></div><div class="section-head" style="margin-top:14px"><h3>Purchase items</h3><button type="button" class="btn" onclick="addPurchaseLine()">+ ADD LINE</button></div><div id="purchase_lines"><div class="form-grid purchase-line" style="border:1px solid var(--line);padding:10px;border-radius:10px;margin-bottom:8px"><div><label>Product *</label><select name="product_id_1" id="purchase_product_id_1" class="purchase-product" required>{opts}</select><div class="scan-inline" style="margin-top:7px"><div><input id="purchase_sku_scan_1" placeholder="Scan/type SKU"></div><button type="button" class="btn scan-btn" onclick="openScanner('purchase_sku_scan_1')">SCAN</button></div><button type="button" class="btn" style="margin-top:7px" onclick="lookupGenericSku('purchase_sku_scan_1','purchase_product_id_1')">LOOK UP SKU</button></div><div><label>Quantity *</label><input type="number" min="1" step="1" name="qty_1" required></div><div><label>Unit Cost *</label><input type="number" min="0" step="0.01" name="unit_cost_1" required></div><div><label>Line Total</label><input class="purchase-line-total" readonly value="0.00"></div></div></div><div class="section-head"><strong>Total: KES <span id="purchase_grand_total">0.00</span></strong></div><div class="actions" style="margin-top:14px"><button class="btn gold" type="submit">SAVE PURCHASE</button><button class="btn" type="reset">CLEAR</button></div><script>
+    supplier_sql='SELECT id,name FROM suppliers WHERE active=1'
+    supplier_args=()
+    if branch_id is not None:
+        supplier_sql+=' AND branch_id=?'; supplier_args=(int(branch_id),)
+    supplier_sql+=' ORDER BY name'
+    c=core.db.c(); supplier_rows=[dict(r) for r in c.execute(supplier_sql,supplier_args).fetchall()]; c.close()
+    supplier_opts='<option value="">Select registered supplier</option>'+''.join(f'<option value="{r["id"]}">{esc(r["name"])}</option>' for r in supplier_rows)
+    content=f'''{purchase_selector}{notice}<section class="card"><div class="section-head"><h2>New Purchase / Stock In</h2><span class="pill">RECORDED BY {esc(u['full_name'])}</span></div><form method="post" action="/purchases">{csrf_input(CURRENT_HANDLER)}<input type="hidden" id="purchase_line_count" name="purchase_line_count" value="1"><div class="form-grid">{purchase_branch_field}<div><label>Supplier *</label><select name="supplier_id" required>{supplier_opts}</select><a class="muted" href="/suppliers?branch_id={branch_id or ''}">REGISTER A NEW SUPPLIER</a></div><div><label>Payment *</label><select name="payment_method"><option>Cash</option><option>M-Pesa</option><option>Credit</option></select></div><div><label>Reference / M-Pesa Code</label><input name="reference"></div></div><div class="section-head" style="margin-top:14px"><h3>Purchase items</h3><button type="button" class="btn" onclick="addPurchaseLine()">+ ADD LINE</button></div><div id="purchase_lines"><div class="form-grid purchase-line" style="border:1px solid var(--line);padding:10px;border-radius:10px;margin-bottom:8px"><div class="product-picker"><label>Search all products</label><input type="search" class="product-search" placeholder="Type product name..." oninput="filterProductOptions(this)"><label>Product *</label><select name="product_id_1" id="purchase_product_id_1" class="purchase-product" required>{opts}</select></div><div><label>Quantity *</label><input type="number" min="1" step="1" name="qty_1" required></div><div><label>Unit Cost *</label><input type="number" min="0" step="0.01" name="unit_cost_1" required></div><div><label>Line Total</label><input class="purchase-line-total" readonly value="0.00"></div></div></div><div class="section-head"><strong>Total: KES <span id="purchase_grand_total">0.00</span></strong></div><div class="actions" style="margin-top:14px"><button class="btn gold" type="submit">SAVE PURCHASE</button><button class="btn" type="reset">CLEAR</button></div><script>
 function purchaseRecalc(){{var total=0;document.querySelectorAll('#purchase_lines .purchase-line').forEach(function(r){{var q=parseFloat(r.querySelector('[name^="qty_"]').value||0)||0,c=parseFloat(r.querySelector('[name^="unit_cost_"]').value||0)||0,t=q*c;total+=t;r.querySelector('.purchase-line-total').value=t.toFixed(2)}});document.getElementById('purchase_grand_total').textContent=total.toFixed(2)}}
-function addPurchaseLine(){{var box=document.getElementById('purchase_lines'),first=box.querySelector('.purchase-line'),n=Number(document.getElementById('purchase_line_count').value||1)+1,row=first.cloneNode(true);document.getElementById('purchase_line_count').value=n;row.querySelectorAll('[name],[id]').forEach(function(e){{if(e.name)e.name=e.name.replace(/_\\d+$/,'_'+n);if(e.id)e.id=e.id.replace(/_\\d+$/,'_'+n)}});row.querySelectorAll('input').forEach(function(e){{if(e.name.indexOf('qty_')===0)e.value='1';else if(e.name.indexOf('unit_cost_')===0||e.classList.contains('purchase-line-total')||e.id.indexOf('purchase_sku_scan_')===0)e.value=''}});row.querySelector('select').value='';box.appendChild(row);purchaseRecalc()}}
+function addPurchaseLine(){{var box=document.getElementById('purchase_lines'),first=box.querySelector('.purchase-line'),n=Number(document.getElementById('purchase_line_count').value||1)+1,row=first.cloneNode(true);document.getElementById('purchase_line_count').value=n;row.querySelectorAll('[name],[id]').forEach(function(e){{if(e.name)e.name=e.name.replace(/_\\d+$/,'_'+n);if(e.id)e.id=e.id.replace(/_\\d+$/,'_'+n)}});row.querySelectorAll('input').forEach(function(e){{if(e.name.indexOf('qty_')===0)e.value='1';else if(e.name.indexOf('unit_cost_')===0||e.classList.contains('purchase-line-total')||e.type==='search')e.value=''}});row.querySelector('select').value='';box.appendChild(row);purchaseRecalc()}}
 document.addEventListener('input',function(e){{if(e.target.closest&&e.target.closest('#purchase_lines'))purchaseRecalc()}});
 </script></form></section></section><section class="card" style="margin-top:14px"><div class="section-head"><h2>Recent Purchases</h2></div>{purchases_table}</section>'''
     return layout(u,'Purchases / Stock In',content,'/purchases','Stock acquisition and supplier control')
@@ -1544,7 +1648,7 @@ def stock_transfers_page(u, query=None, message=''):
     branch_id=branch_scope_for(u,query)
     c=core.db.c()
     branches=[dict(r) for r in c.execute('SELECT id,name FROM branches WHERE active=1 ORDER BY name').fetchall()]
-    products=[dict(r) for r in c.execute('SELECT id,name,sku FROM products WHERE active=1 ORDER BY name').fetchall()]
+    products=[dict(r) for r in c.execute('SELECT id,name FROM products WHERE active=1 ORDER BY name').fetchall()]
     if branch_id is not None:
         transfers=[dict(r) for r in c.execute('''SELECT t.*,sb.name source_name,db.name destination_name,p.name product_name,u.full_name requested_name,COALESCE(a.full_name,'') approved_name FROM stock_transfers t JOIN branches sb ON sb.id=t.source_branch_id JOIN branches db ON db.id=t.destination_branch_id JOIN products p ON p.id=t.product_id JOIN users u ON u.id=t.requested_by LEFT JOIN users a ON a.id=t.approved_by WHERE t.source_branch_id=? OR t.destination_branch_id=? ORDER BY t.id DESC LIMIT 100''',(branch_id,branch_id)).fetchall()]
     else:
@@ -1559,7 +1663,7 @@ def stock_transfers_page(u, query=None, message=''):
         source_opts=f'<option value="{int(u.get("branch_id") or 0)}">{esc(next((b["name"] for b in branches if int(b["id"])==int(u.get("branch_id") or 0)),"Assigned Branch"))}</option>'
         count_branch_opts=f'<option value="{int(u.get("branch_id") or 0)}" selected>{esc(next((b["name"] for b in branches if int(b["id"])==int(u.get("branch_id") or 0)),"Assigned Branch"))}</option>'
     destination_opts='<option value="">Select destination branch</option>'+''.join(f'<option value="{b["id"]}">{esc(b["name"])}</option>' for b in branches)
-    product_opts='<option value="">Select product</option>'+''.join(f'<option value="{p["id"]}">{esc(p["name"])} · {esc(p["sku"])}</option>' for p in products)
+    product_opts='<option value="">Select product</option>'+''.join(f'<option value="{p["id"]}">{esc(p["name"])}</option>' for p in products)
     rows=[]
     for t in transfers:
         actions=''
@@ -1590,14 +1694,22 @@ def products_page(u, message='', query=None):
         raw=_qsval(query or {},'branch_id',''); branch_id=int(raw) if str(raw).isdigit() else 0
         if branch_id and not any(int(b['id'])==branch_id for b in branches): c.close(); raise PermissionError('Selected branch is unavailable.')
     else: branch_id=int(u.get('branch_id') or 0)
-    rows=[dict(r) for r in c.execute('''SELECT p.*,COALESCE(bs.qty,0) branch_qty,COALESCE(bs.avg_cost,p.avg_cost) branch_cost,COALESCE(bs.sell_price,p.sell_price) branch_sell_price,COALESCE(bs.wholesale_price,p.wholesale_price) branch_wholesale_price,COALESCE(bs.reorder_level,p.reorder_level) branch_reorder FROM products p LEFT JOIN branch_stock bs ON bs.product_id=p.id AND bs.branch_id=? ORDER BY p.active DESC,p.name''',(branch_id,)).fetchall()]; c.close()
+    search_term=str(_qsval(query or {},'search','') or '').strip()
+    sql='''SELECT p.*,COALESCE(bs.qty,0) branch_qty,COALESCE(bs.avg_cost,p.avg_cost) branch_cost,COALESCE(bs.sell_price,p.sell_price) branch_sell_price,COALESCE(bs.wholesale_price,p.wholesale_price) branch_wholesale_price,COALESCE(bs.reorder_level,p.reorder_level) branch_reorder FROM products p LEFT JOIN branch_stock bs ON bs.product_id=p.id AND bs.branch_id=?'''
+    args=[branch_id]
+    if search_term:
+        sql+=' WHERE (p.name LIKE ? OR p.category LIKE ?)'
+        args.extend(['%'+search_term+'%','%'+search_term+'%'])
+    sql+=' ORDER BY p.active DESC,p.name'
+    rows=[dict(r) for r in c.execute(sql,args).fetchall()]; c.close()
     notice=f'<div class="flash error">{esc(message)}</div>' if message else ''
+    catalogue_search=f'<section class="card" style="margin-bottom:12px"><form method="get" action="/products" class="form-grid"><input type="hidden" name="branch_id" value="{branch_id}"><div><label>Search all registered products</label><input type="search" name="search" value="{esc(search_term)}" placeholder="Product name or category"></div><div><button class="btn gold" type="submit">SEARCH PRODUCTS</button> <a class="btn" href="/products?branch_id={branch_id}">CLEAR</a></div></form></section>'
     if role=='ADMIN':
         price_rows=[]; action_rows=[]
         for r in rows:
             pid=r['id']; wholesale_value=r.get('branch_wholesale_price') if r.get('branch_wholesale_price') is not None else r['branch_sell_price']
             price_rows.append([
-                esc(r['name']), esc(r['sku']),
+                esc(r['name']),
                 f'<input aria-label="Retail price for {esc(r["name"])}" name="bulk_sell_{pid}" type="number" min="0.01" step="0.01" value="{float(r["branch_sell_price"] or 0):.2f}" required style="width:120px">',
                 f'<input aria-label="Wholesale price for {esc(r["name"])}" name="bulk_wholesale_{pid}" type="number" min="0.01" step="0.01" value="{float(wholesale_value or 0):.2f}" required style="width:120px">',
                 f'<input aria-label="COGS unit cost for {esc(r["name"])}" name="bulk_cost_{pid}" type="number" min="0" step="0.01" value="{float(r["branch_cost"] or 0):.2f}" required style="width:120px">',
@@ -1608,21 +1720,21 @@ def products_page(u, message='', query=None):
             stock=f'''<form method="post" action="/products" class="inline-actions">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="stock"><input type="hidden" name="product_id" value="{pid}"><input name="new_stock" aria-label="New stock quantity" type="number" step="1" min="0" value="{r['branch_qty']}" required style="width:90px"><input type="hidden" name="branch_id" value="{branch_id}"><input name="reason" placeholder="Stock correction reason" required minlength="5" style="width:180px"><button class="btn">ADJUST STOCK</button></form>'''
             action_btn=f'''<form method="post" action="/products" class="inline-actions" onsubmit="return confirm('Archive this product? Historical records will be preserved.');">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="delete"><input type="hidden" name="product_id" value="{pid}"><input name="reason" placeholder="Reason required" required minlength="5" style="width:180px"><button class="btn danger">ARCHIVE</button></form>''' if r['active'] else f'''<form method="post" action="/products" class="inline-actions">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="restore"><input type="hidden" name="product_id" value="{pid}"><input name="reason" placeholder="Reason required" required minlength="5" style="width:180px"><button class="btn">RESTORE</button></form>'''
             action_rows.append([esc(r['name']),stock,action_btn])
-        bulk_table=html_table(['Product','SKU','Retail Price','Wholesale Price','COGS / Unit Cost','Branch Stock','Stock Value at Cost','Reorder Level','Status'],price_rows,'No products registered.')
+        bulk_table=html_table(['Product','Retail Price','Wholesale Price','COGS / Unit Cost','Branch Stock','Stock Value at Cost','Reorder Level','Status'],price_rows,'No products registered.')
         action_table=html_table(['Product','Stock Quantity Adjustment','Archive / Restore'],action_rows,'No products registered.')
         extra=f'''<section class="card" style="margin-top:14px"><div class="notice"><b>QUICK STOCK EDIT:</b> Edit any number of retail prices, wholesale prices, COGS/unit costs and reorder levels, then click SAVE ALL STOCK CHANGES once. No confirmation or reason is required; the system records an automatic audit note. Stock quantities are preserved and adjusted separately.</div><form method="post" action="/products" id="bulk-stock-edit">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="bulk_save"><input type="hidden" name="branch_id" value="{branch_id}">{bulk_table}<div class="actions" style="margin-top:14px"><button class="btn gold" type="submit">SAVE ALL STOCK CHANGES</button><button class="btn" type="reset">CANCEL UNSAVED CHANGES</button></div></form><h3 style="margin-top:24px">Separate Stock Quantity / Product Status Actions</h3><p class="muted">Use these only when you need to correct physical stock or archive/restore a product. They require their own reason to preserve the stock audit trail.</p>{action_table}</section>'''
         title='Product Registration & Branch Stock Editor'; subtitle='Edit costs and prices for the selected branch'
     else:
-        table=html_table(['Product Name','SKU','Category','Unit','Retail / Wholesale Price','Stock','Reorder','Status'],[[esc(r['name']),esc(r['sku']),esc(r['category']),esc(r['unit']),money(r['branch_sell_price'])+' / '+money(r.get('branch_wholesale_price') or r['branch_sell_price']),r['branch_qty'],r['branch_reorder'],'ACTIVE' if r['active'] else 'ARCHIVED'] for r in rows])
+        table=html_table(['Product Name','Category','Unit','Retail / Wholesale Price','Stock','Reorder','Status'],[[esc(r['name']),esc(r['category']),esc(r['unit']),money(r['branch_sell_price'])+' / '+money(r.get('branch_wholesale_price') or r['branch_sell_price']),r['branch_qty'],r['branch_reorder'],'ACTIVE' if r['active'] else 'ARCHIVED'] for r in rows])
         extra=f'<section class="card" style="margin-top:14px"><div class="notice">Management and Sales Person can register products with separate retail and wholesale prices. Product catalogue entries are shared, but stock, costs and prices remain branch-specific; existing branch prices and costs can only be changed by the Administrator.</div>{table}</section>'
         title='Product Registration'; subtitle='Management and Sales Person product registration access'
-    product_opening_opts=''.join(f'<option value="{r["id"]}">{esc(r["name"])} · {esc(r["sku"])}</option>' for r in rows if r['active'])
+    product_opening_opts=''.join(f'<option value="{r["id"]}">{esc(r["name"])}</option>' for r in rows if r['active'])
     branch_opening_opts=('<option value="">Select branch</option>'+''.join(f'<option value="{b["id"]}" {"selected" if int(b["id"])==branch_id else ""}>{esc(b["name"])}</option>' for b in branches)) if role in ('ADMIN','MANAGEMENT') else f'<input type="hidden" name="branch_id" value="{branch_id}">'
     branch_opening_field=f'<div><label>Branch</label><select name="branch_id" required>{branch_opening_opts}</select></div>' if role in ('ADMIN','MANAGEMENT') else branch_opening_opts
     product_branch_field=f'<div><label>Opening Stock Branch *</label><select name="branch_id" required>{branch_opening_opts}</select></div>' if role in ('ADMIN','MANAGEMENT') else f'<input type="hidden" name="branch_id" value="{branch_id}">'
     product_branch_selector=branch_scope_selector(u,{'branch_id':str(branch_id) if branch_id else ''},'/products') if role in ('ADMIN','MANAGEMENT') else ''
     opening_form=f'''<section class="card" style="margin-top:14px"><h3>Opening Stock — Existing Product in a Branch</h3><p class="muted">Enter the physically counted stock for a product in this branch once. The system will keep each branch balance separate.</p><form method="post" action="/products">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="opening"><div class="form-grid"><div><label>Product</label><select name="product_id" required>{product_opening_opts}</select></div>{branch_opening_field}<div><label>Physical Opening Quantity</label><input type="number" name="opening_qty" min="0.001" step="0.001" required></div><div><label>Unit Cost</label><input type="number" name="opening_cost" min="0.01" step="0.01" required></div><div><label>Reason / Stock Take Reference</label><input name="opening_reason" minlength="5" required placeholder="Physical opening stock count"></div></div><button class="btn gold" style="margin-top:12px">SAVE BRANCH OPENING STOCK</button></form></section>'''
-    content=f'''{product_branch_selector}{notice}<section class="card"><div class="section-head"><h2>{esc(title)}</h2><span class="pill">{esc(u['full_name'])} · {esc(role_display(role))}</span></div><form method="post" action="/products"><div class="form-grid">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="create">{product_branch_field}<div><label>SKU *</label><div class="scan-inline"><div><input name="sku" id="product_sku" required></div><button type="button" class="btn scan-btn" onclick="openScannerFill('product_sku')">SCAN</button></div></div><div><label>Product Name *</label><input name="name" required></div><div><label>Category *</label><input name="category" placeholder="Wine, Spirit, Beer..." required></div><div><label>Unit</label><input name="unit" value="{esc(core.get_setting('default_unit','bottle'))}" required></div><div><label>Retail Selling Price</label><input type="number" name="sell_price" min="0.01" step="0.01" required></div><div><label>Wholesale Selling Price</label><input type="number" name="wholesale_price" min="0.01" step="0.01" required><small class="muted">Catalogue is shared; stock quantity is recorded only in the selected branch.</small></div><div><label>Opening Stock</label><input type="number" name="stock_qty" min="0" step="1" required></div><div><label>COGS / Unit Cost (KSh) — Cost of Goods Sold *</label><input type="number" name="cogs_unit_cost" min="0" step="0.01" value="0" required><small class="muted">Enter the cost you pay per unit. Required to calculate accurate profit and COGS.</small></div><div><label>Reorder Level</label><input type="number" name="reorder_level" min="0" step="1" value="{esc(core.get_setting('default_reorder_level','5'))}" required></div></div><div class="actions" style="margin-top:14px"><button class="btn gold" type="submit">SAVE PRODUCT</button></div></form></section>{opening_form}{extra}'''
+    content=f'''{product_branch_selector}{catalogue_search}{notice}<section class="card"><div class="section-head"><h2>{esc(title)}</h2><span class="pill">{esc(u['full_name'])} · {esc(role_display(role))}</span></div><form method="post" action="/products"><div class="form-grid">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="create">{product_branch_field}<div><label>Product Name *</label><input name="name" required></div><div><label>Category *</label><input name="category" placeholder="Wine, Spirit, Beer..." required></div><div><label>Unit</label><input name="unit" value="{esc(core.get_setting('default_unit','bottle'))}" required></div><div><label>Retail Selling Price</label><input type="number" name="sell_price" min="0.01" step="0.01" required></div><div><label>Wholesale Selling Price</label><input type="number" name="wholesale_price" min="0.01" step="0.01" required><small class="muted">Catalogue is shared; stock quantity is recorded only in the selected branch.</small></div><div><label>Opening Stock</label><input type="number" name="stock_qty" min="0" step="1" required></div><div><label>COGS / Unit Cost (KSh) — Cost of Goods Sold *</label><input type="number" name="cogs_unit_cost" min="0" step="0.01" value="0" required><small class="muted">Enter the cost you pay per unit. Required to calculate accurate profit and COGS.</small></div><div><label>Reorder Level</label><input type="number" name="reorder_level" min="0" step="1" value="{esc(core.get_setting('default_reorder_level','5'))}" required></div></div><div class="actions" style="margin-top:14px"><button class="btn gold" type="submit">SAVE PRODUCT</button></div></form></section>{opening_form}{extra}'''
     return layout(u,title,content,'/products',subtitle)
 
 def users_page(u, message=''):
@@ -2896,7 +3008,7 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/backup/download': return self.download_backup(u)
             routes={
                 '/':home_page,'/sales':sales_page,'/sales-dashboard':sales_dashboard,
-                '/purchases':purchase_page,'/expenses':expense_page,'/expense-report':expense_report_page,
+                '/purchases':purchase_page,'/suppliers':suppliers_page,'/expenses':expense_page,'/expense-report':expense_report_page,
                 '/customers':customers_page,'/reports':reports_page,'/stock-report':stock_report_page,
                 '/reorder-report':reorder_report_page,'/stock-transfers':stock_transfers_page,'/live':live_page,'/products':products_page,
                 '/users':users_page,'/branches':branches_page,'/branch-performance':branch_performance_page,'/settings':settings_page,'/ledger':ledger_page,
@@ -2904,7 +3016,7 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/change-password': return send_html(self,change_password_page(u))
             if path in routes:
                 if path=='/': return send_html(self,home_page(u,qs))
-                if path in ('/reports','/stock-report','/branch-performance','/products','/purchases','/expenses','/stock-transfers','/customers','/sales-dashboard'):
+                if path in ('/reports','/stock-report','/branch-performance','/products','/purchases','/suppliers','/expenses','/stock-transfers','/customers','/sales-dashboard'):
                     return send_html(self, routes[path](u, query=qs))
                 if path in ('/expense-report','/ledger','/profit-loss','/reorder-report','/live'):
                     return send_html(self, routes[path](u, qs))
@@ -3023,6 +3135,22 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/mpesa/confirm-direct': return send_json(self.mpesa_confirm_direct_post(u,form))
             if path=='/customers/credit-payment': return send_json(self.credit_payment_post(u,form))
             if path=='/sales': return self.sales_post(u,form)
+            if path=='/suppliers':
+                require_perm_user(u,'CREATE_PURCHASE')
+                try:
+                    action=form.get('action','create')
+                    if action=='create':
+                        save_supplier(u,form); msg='Supplier registered successfully.'
+                    elif action=='archive':
+                        archive_supplier(u,form); msg='Supplier archived successfully.'
+                    elif action=='restore':
+                        archive_supplier(u,form,restore=True); msg='Supplier restored successfully.'
+                    else:
+                        raise ValueError('Unknown supplier action.')
+                    add_flash(session_token(self),msg,'success')
+                    return redirect(self,'/suppliers?branch_id='+str(form.get('branch_id') or u.get('branch_id') or ''))
+                except Exception as e:
+                    return send_html(self,suppliers_page(u,str(e),query={'branch_id':str(form.get('branch_id') or u.get('branch_id') or '')}),400)
             if path=='/purchases':
                 require_perm_user(u,'CREATE_PURCHASE')
                 try: no,total=save_purchase(u,form); add_flash(session_token(self),f'Purchase {no} saved successfully. Stock updated in the selected branch.','success'); return redirect(self,'/purchases?branch_id='+str(form.get('branch_id') or u.get('branch_id') or ''))
@@ -3270,7 +3398,7 @@ class Handler(BaseHTTPRequestHandler):
         if kind=='stock':
             require_perm_user(u,'VIEW_STOCK'); bid=int(qs.get('branch_id',['0'])[0] or 0) or None
             if role_name(u) not in ('ADMIN','MANAGEMENT'): bid=int(u.get('branch_id') or 0)
-            rows=core.stock_report(start,end,bid); headers=['SKU','Product Name','Category','Opening Stock','Purchased','Sold','Adjustments','Closing Stock','Retail Units','Wholesale Units','Retail Revenue','Wholesale Revenue','Retail Price','Wholesale Price','Avg Cost','Closing Value','Reorder','Status']; data=[[r['sku'],r['name'],r['category'],r['opening'],r['purchased'],r['sold'],r['adjustments'],r['closing'],r['retail_units'],r['wholesale_units'],r['retail_revenue'],r['wholesale_revenue'],r['retail_price'],r['wholesale_price'],r['avg_cost'],r['closing']*r['avg_cost'],r['reorder_level'],r['status']] for r in rows]; title=f"{core.get_setting('business_name',APP_NAME)} · BRANCH STOCK REPORT"
+            rows=core.stock_report(start,end,bid); headers=['Product Name','Category','Opening Stock','Purchased','Sold','Adjustments','Closing Stock','Retail Units','Wholesale Units','Retail Revenue','Wholesale Revenue','Retail Price','Wholesale Price','Avg Cost','Closing Value','Reorder','Status']; data=[[r['name'],r['category'],r['opening'],r['purchased'],r['sold'],r['adjustments'],r['closing'],r['retail_units'],r['wholesale_units'],r['retail_revenue'],r['wholesale_revenue'],r['retail_price'],r['wholesale_price'],r['avg_cost'],r['closing']*r['avg_cost'],r['reorder_level'],r['status']] for r in rows]; title=f"{core.get_setting('business_name',APP_NAME)} · BRANCH STOCK REPORT"
         else:
             require_perm_user(u,'VIEW_REPORTS'); rows=core.report_data(start,end); headers=['Receipt','Date/Time','Customer','Units','Total','Cash','M-Pesa','Attended By']; data=[[r['receipt_no'],r['sold_at'],r['customer'],r['units'],r['total'],r['cash'],r['mpesa'],r['attended_by']] for r in rows]; title=f"{core.get_setting('business_name',APP_NAME)} · {core.get_setting('business_branch_name','')} · SALES REPORT"
         if fmt=='pdf': return send_file(self,make_pdf(title,headers,data),'application/pdf',re.sub(r'[^A-Za-z0-9]+','_',title)+'.pdf')
