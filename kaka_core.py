@@ -122,6 +122,9 @@ class DB:
         customer_cols={r['name'] for r in c.execute('PRAGMA table_info(customers)').fetchall()}
         if 'branch_id' not in customer_cols: c.execute('ALTER TABLE customers ADD COLUMN branch_id INTEGER REFERENCES branches(id)')
         c.execute('UPDATE customers SET branch_id=(SELECT s.branch_id FROM sales s WHERE s.customer_id=customers.id AND s.branch_id IS NOT NULL ORDER BY s.sold_at DESC LIMIT 1) WHERE branch_id IS NULL')
+        pending_cols={r['name'] for r in c.execute('PRAGMA table_info(pending_payment_batches)').fetchall()}
+        if 'branch_id' not in pending_cols: c.execute('ALTER TABLE pending_payment_batches ADD COLUMN branch_id INTEGER REFERENCES branches(id)')
+        c.execute('UPDATE pending_payment_batches SET branch_id=(SELECT branch_id FROM users WHERE users.id=pending_payment_batches.user_id) WHERE branch_id IS NULL')
         ts=now_str()
         # Branches are created only through Administrator > Branch Registration; never invent a default outlet.
         c.execute('UPDATE purchases SET branch_id=(SELECT branch_id FROM users WHERE users.id=purchases.user_id) WHERE branch_id IS NULL')
