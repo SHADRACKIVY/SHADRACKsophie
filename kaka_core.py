@@ -237,6 +237,13 @@ class DB:
             c.execute('INSERT OR IGNORE INTO role_permissions(role,key,enabled) VALUES(?,?,?)',('SALES',key,1 if key in sales_defaults else 0))
             c.execute('INSERT OR IGNORE INTO role_permissions(role,key,enabled) VALUES(?,?,?)',('MANAGEMENT',key,1 if key in management_defaults else 0))
 
+        # Ensure Product Registration is enabled for every Management account,
+        # including existing accounts whose older permission overrides disabled it.
+        c.execute("UPDATE role_permissions SET enabled=1 WHERE role='MANAGEMENT' AND key='MANAGE_PRODUCTS'")
+        c.execute("""INSERT INTO user_permissions(user_id,key,enabled)
+                     SELECT id,'MANAGE_PRODUCTS',1 FROM users WHERE access_role='MANAGEMENT'
+                     ON CONFLICT(user_id,key) DO UPDATE SET enabled=1""")
+
         defaults={
             'business_name':APP_NAME,
             'business_subtitle':'Executive Business Management System',

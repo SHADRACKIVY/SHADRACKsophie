@@ -63,6 +63,12 @@ jobs:
           core.update_permissions(admin,{"roles":{"MANAGEMENT":{"VIEW_STOCK":True,"VIEW_REPORTS":False,"MANAGE_SETTINGS":True,"MANAGE_PRODUCTS":True},"SALES":{"CREATE_SALE":True,"MANAGE_USERS":True}},"users":{}})
           manager={"id":manager_id,"username":"ci_role_manager","full_name":"CI Role Manager","access_role":"MANAGEMENT","role":"SALES","branch_id":None}
           sales={"id":sales_id,"username":"ci_role_sales","full_name":"CI Role Sales","access_role":"SALES","role":"SALES","branch_id":bid}
+          # Simulate a stale disabled override from an older deployment; startup migration must re-enable it.
+          c=core.db.c()
+          c.execute("INSERT INTO user_permissions(user_id,key,enabled) VALUES(?,?,0) ON CONFLICT(user_id,key) DO UPDATE SET enabled=0",(manager_id,"MANAGE_PRODUCTS"))
+          c.commit(); c.close()
+          core.db.init()
+          assert core.effective_permissions(manager)["MANAGE_PRODUCTS"] is True
           assert core.effective_permissions(manager)["VIEW_STOCK"] is True
           assert core.effective_permissions(manager)["MANAGE_PRODUCTS"] is True
           app.CURRENT_HANDLER=type("FakeHandler",(),{"headers":{}})()
@@ -91,8 +97,12 @@ jobs:
           except PermissionError:
               pass
           admin_edit_user(admin,{"user_id":str(sales_id),"full_name":"Sales","role":"SALES","active":"1","branch_id":str(bid)})
-          # A backup download must be a readable, integrity-checked SQLite snapshot.
-          import io, sqlite3
+          # A complete backup must include user login hashes and real business records.
+          c=core.db.c()
+          c.execute("INSERT INTO products(sku,name,category,unit,sell_price,wholesale_price,avg_cost,stock_qty,reorder_level,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",("CI-SKU-001","CI Backup Product","Test","bottle",100,90,60,5,2,1,core.now_str(),core.now_str()))
+          c.commit(); c.close()
+          # A backup download must be a readable, integrity-checked SQLite snapshot with a manifest.
+          import io, sqlite3, json
           fake=object.__new__(app.Handler)
           fake.send_response=lambda status: None
           fake.send_header=lambda name,value: None
@@ -106,7 +116,15 @@ jobs:
           snap=sqlite3.connect(backup_files[-1])
           assert snap.execute("PRAGMA integrity_check").fetchone()[0]=="ok"
           assert snap.execute("SELECT COUNT(*) FROM users").fetchone()[0]>=2
+          assert snap.execute("SELECT COUNT(*) FROM products").fetchone()[0]>=1
+          manifest=snap.execute("SELECT app_name,login_accounts,business_activity_rows,row_counts_json,integrity_check FROM backup_manifest WHERE id=1").fetchone()
+          assert manifest[0]=="MONTEZ LIQUOR" and manifest[1]>=2 and manifest[2]>=1 and manifest[4]=="ok"
+          assert json.loads(manifest[3])["products"]>=1
+          assert snap.execute("SELECT COUNT(*) FROM users WHERE password_hash IS NULL OR password_hash=''").fetchone()[0]==0
           snap.close()
+          # Empty databases must never be presented as complete business backups.
+          assert app.backup_readiness({"users":3,"products":0,"sales":0,"purchases":0,"expenses":0})[0] is False
+          assert app.backup_readiness({"users":3,"products":1,"sales":0,"purchases":0,"expenses":0})[0] is True
           # M-Pesa callbacks must not mark mismatched amount/phone as paid.
           c=core.db.c()
           c.execute("INSERT INTO mpesa_stk_requests(created_at,user_id,checkout_request_id,client_ref,amount,phone,status,raw_response,updated_at,branch_id) VALUES(?,?,?,?,?,?,?,?,?,?)",(core.now_str(),admin_id,"ci-review-checkout","CI-REVIEW-1",100,"254712345678","PENDING","{}",core.now_str(),bid))
