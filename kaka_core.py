@@ -541,8 +541,18 @@ def create_sale(u, data):
         c.rollback(); raise
     finally: c.close()
 
-def products():
-    c=db.c(); rows=c.execute('SELECT * FROM products WHERE active=1 ORDER BY name').fetchall(); c.close(); return [dict(r) for r in rows]
+def products(branch_id=None):
+    c=db.c()
+    if branch_id:
+        rows=c.execute('''SELECT p.*,COALESCE(bs.qty,0) stock_qty,COALESCE(bs.avg_cost,p.avg_cost) avg_cost,
+                          COALESCE(bs.sell_price,p.sell_price) sell_price,COALESCE(bs.wholesale_price,p.wholesale_price) wholesale_price,
+                          COALESCE(bs.reorder_level,p.reorder_level) reorder_level
+                          FROM products p LEFT JOIN branch_stock bs ON bs.product_id=p.id AND bs.branch_id=?
+                          WHERE p.active=1 ORDER BY p.name''',(int(branch_id),)).fetchall()
+    else:
+        rows=c.execute('''SELECT p.*,COALESCE(SUM(bs.qty),0) stock_qty,COALESCE(AVG(bs.avg_cost),p.avg_cost) avg_cost
+                          FROM products p LEFT JOIN branch_stock bs ON bs.product_id=p.id WHERE p.active=1 GROUP BY p.id ORDER BY p.name''').fetchall()
+    c.close(); return [dict(r) for r in rows]
 
 def customers():
     c=db.c(); rows=c.execute('SELECT * FROM customers WHERE active=1 ORDER BY full_name').fetchall(); c.close(); return [dict(r) for r in rows]
