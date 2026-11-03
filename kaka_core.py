@@ -563,9 +563,9 @@ def products(branch_id=None):
 def customers():
     c=db.c(); rows=c.execute('SELECT * FROM customers WHERE active=1 ORDER BY full_name').fetchall(); c.close(); return [dict(r) for r in rows]
 
-def business_performance(start, end):
-    """Return a configurable 0-100 business performance score for a period."""
-    d=pl_summary(start,end)
+def business_performance(start, end, branch_id=None):
+    """Return business performance for one branch or the whole company."""
+    d=pl_summary(start,end,branch_id)
     revenue=float(d.get('revenue',0) or 0); gross=float(d.get('gross_profit',0) or 0); expenses=float(d.get('expenses',0) or 0); net=float(d.get('net_profit',0) or 0)
     basis=str(get_setting('performance_basis','NET_PROFIT_MARGIN') or 'NET_PROFIT_MARGIN').upper()
     if basis=='GROSS_PROFIT_MARGIN': numerator=gross; pct=(gross/revenue*100.0) if revenue else 0.0; label='Gross Profit Margin'
@@ -575,34 +575,51 @@ def business_performance(start, end):
     status='PROFIT' if numerator>=0 else 'LOSS'; traffic='GREEN' if status=='PROFIT' and pct>=threshold else 'RED'; score=max(0.0,min(100.0,pct))
     return {'percentage':pct,'score':score,'threshold':threshold,'status':status,'traffic':traffic,'basis':basis,'label':label,'revenue':revenue,'gross_profit':gross,'expenses':expenses,'net_profit':net,'start':start,'end':end}
 
-def dashboard():
+def dashboard(branch_id=None):
     c=db.c(); today=now().strftime('%Y-%m-%d')
-    s=c.execute('SELECT COALESCE(SUM(total),0) v,COUNT(*) n FROM sales WHERE substr(sold_at,1,10)=? AND customer_type<>"CREDIT"',(today,)).fetchone()
-    p=c.execute('SELECT COALESCE(SUM(amount),0) v FROM expenses WHERE substr(expense_date,1,10)=?',(today,)).fetchone()
-    mp=c.execute('SELECT COALESCE(SUM(sp.amount),0) v FROM sale_payments sp JOIN sales s ON s.id=sp.sale_id WHERE substr(s.sold_at,1,10)=? AND sp.payment_method="MPESA"',(today,)).fetchone()
-    cash=c.execute('SELECT COALESCE(SUM(sp.amount),0) v FROM sale_payments sp JOIN sales s ON s.id=sp.sale_id WHERE substr(s.sold_at,1,10)=? AND sp.payment_method="CASH"',(today,)).fetchone()
-    stock=c.execute('SELECT COALESCE(SUM(bs.qty*bs.avg_cost),0) v, COALESCE(SUM(bs.qty*bs.sell_price),0) retail_v, COALESCE(SUM(bs.qty),0) units, SUM(CASE WHEN bs.qty<=bs.reorder_level THEN 1 ELSE 0 END) low FROM branch_stock bs JOIN products p ON p.id=bs.product_id WHERE p.active=1').fetchone(); c.close()
-    return {'today_sales':s['v'],'transactions':s['n'],'expenses':p['v'],'mpesa':mp['v'],'cash':cash['v'],'stock_value':stock['v'],'stock_retail_value':stock['retail_v'],'stock_units':stock['units'],'low_stock':stock['low'] or 0}
+    scope=' AND branch_id=?' if branch_id is not None else ''
+    args=(today,int(branch_id)) if branch_id is not None else (today,)
+    s=c.execute('SELECT COALESCE(SUM(total),0) v,COUNT(*) n FROM sales WHERE substr(sold_at,1,10)=? AND customer_type<>"CREDIT"'+scope,args).fetchone()
+    p=c.execute('SELECT COALESCE(SUM(amount),0) v FROM expenses WHERE substr(expense_date,1,10)=?'+scope,args).fetchone()
+    pay_scope=' AND s.branch_id=?' if branch_id is not None else ''
+    pay_args=(today,int(branch_id)) if branch_id is not None else (today,)
+    mp=c.execute('SELECT COALESCE(SUM(sp.amount),0) v FROM sale_payments sp JOIN sales s ON s.id=sp.sale_id WHERE substr(s.sold_at,1,10)=? AND sp.payment_method="MPESA"'+pay_scope,pay_args).fetchone()
+    cash=c.execute('SELECT COALESCE(SUM(sp.amount),0) v FROM sale_payments sp JOIN sales s ON s.id=sp.sale_id WHERE substr(s.sold_at,1,10)=? AND sp.payment_method="CASH"'+pay_scope,pay_args).fetchone()
+    cogs=c.execute('SELECT COALESCE(SUM(sl.qty*sl.unit_cost),0) v,COUNT(*) n,SUM(CASE WHEN COALESCE(sl.cogs_cost_source,"RECORDED")="MISSING_COST" OR COALESCE(sl.unit_cost,0)<=0 THEN 1 ELSE 0 END) missing,SUM(CASE WHEN COALESCE(sl.cogs_cost_source,"RECORDED")="ESTIMATED_CURRENT_AVG_COST" THEN 1 ELSE 0 END) estimated FROM sale_lines sl JOIN sales s ON s.id=sl.sale_id WHERE substr(s.sold_at,1,10)=?'+pay_scope,pay_args).fetchone()
+    stock_scope=' AND bs.branch_id=?' if branch_id is not None else ''
+    stock_args=(int(branch_id),) if branch_id is not None else ()
+    stock=c.execute('SELECT COALESCE(SUM(bs.qty*bs.avg_cost),0) v,COALESCE(SUM(bs.qty*bs.sell_price),0) retail_v,COALESCE(SUM(bs.qty),0) units,SUM(CASE WHEN bs.qty<=bs.reorder_level THEN 1 ELSE 0 END) low FROM branch_stock bs JOIN products p ON p.id=bs.product_id WHERE p.active=1'+stock_scope,stock_args).fetchone()
+    c.close()
+    cv=float(cogs['v'] or 0); rev=float(s['v'] or 0)
+    return {'today_sales':rev,'transactions':s['n'],'expenses':p['v'],'mpesa':mp['v'],'cash':cash['v'],'today_cogs':cv,'today_gross_profit':rev-cv,'cogs_lines':int(cogs['n'] or 0),'cogs_missing_lines':int(cogs['missing'] or 0),'cogs_estimated_lines':int(cogs['estimated'] or 0),'stock_value':stock['v'],'stock_retail_value':stock['retail_v'],'stock_units':stock['units'],'low_stock':stock['low'] or 0}
 
-def live_monitoring():
-    c=db.c(); nowdt=now(); cutoff=(dt.datetime.now(dt.timezone.utc).timestamp()-int(float(get_setting('idle_timeout_minutes','2'))*60));
+def live_monitoring(branch_id=None):
+    c=db.c(); nowdt=now(); cutoff=(dt.datetime.now(dt.timezone.utc).timestamp()-int(float(get_setting('idle_timeout_minutes','2'))*60))
     active_users=0
     for v in SESSIONS.values():
         last=v.get('last_activity',0) if isinstance(v,dict) else 0
         if last>=cutoff: active_users+=1
     today=nowdt.strftime('%Y-%m-%d')
-    k=c.execute("SELECT COALESCE(SUM(total),0) sales, COUNT(*) transactions FROM sales WHERE substr(sold_at,1,10)=? AND customer_type<>'CREDIT'",(today,)).fetchone()
-    p=c.execute("SELECT COALESCE(SUM(total),0) purchases, COUNT(*) n FROM purchases WHERE substr(purchased_at,1,10)=?",(today,)).fetchone()
-    e=c.execute("SELECT COALESCE(SUM(amount),0) expenses, COUNT(*) n FROM expenses WHERE substr(expense_date,1,10)=?",(today,)).fetchone()
-    mp=c.execute("SELECT COALESCE(SUM(amount),0) v FROM sale_payments sp JOIN sales s ON s.id=sp.sale_id WHERE substr(s.sold_at,1,10)=? AND sp.payment_method='MPESA'",(today,)).fetchone()['v']
-    low=c.execute("SELECT COUNT(*) n FROM products WHERE active=1 AND stock_qty<=reorder_level").fetchone()['n']
-    recent_sales=[dict(r) for r in c.execute("SELECT s.receipt_no,s.sold_at,s.total,COALESCE(u.full_name,'') user_name,COALESCE(cu.full_name,'Walk-in Customer') customer FROM sales s LEFT JOIN users u ON u.id=s.user_id LEFT JOIN customers cu ON cu.id=s.customer_id ORDER BY s.id DESC LIMIT 8")]
-    recent_purchases=[dict(r) for r in c.execute("SELECT purchase_no,purchased_at,total,supplier,COALESCE(u.full_name,'') user_name FROM purchases p JOIN users u ON u.id=p.user_id ORDER BY p.id DESC LIMIT 8")]
-    recent_expenses=[dict(r) for r in c.execute("SELECT expense_no,expense_date,amount,category,COALESCE(u.full_name,'') user_name FROM expenses e JOIN users u ON u.id=e.user_id ORDER BY e.id DESC LIMIT 8")]
+    scope=' AND branch_id=?' if branch_id is not None else ''
+    args=(today,int(branch_id)) if branch_id is not None else (today,)
+    k=c.execute("SELECT COALESCE(SUM(total),0) sales,COUNT(*) transactions FROM sales WHERE substr(sold_at,1,10)=? AND customer_type<>'CREDIT'"+scope,args).fetchone()
+    p=c.execute("SELECT COALESCE(SUM(total),0) purchases,COUNT(*) n FROM purchases WHERE substr(purchased_at,1,10)=?"+scope,args).fetchone()
+    e=c.execute("SELECT COALESCE(SUM(amount),0) expenses,COUNT(*) n FROM expenses WHERE substr(expense_date,1,10)=?"+scope,args).fetchone()
+    pay_scope=' AND s.branch_id=?' if branch_id is not None else ''
+    pay_args=(today,int(branch_id)) if branch_id is not None else (today,)
+    mp=c.execute("SELECT COALESCE(SUM(amount),0) v FROM sale_payments sp JOIN sales s ON s.id=sp.sale_id WHERE substr(s.sold_at,1,10)=? AND sp.payment_method='MPESA'"+pay_scope,pay_args).fetchone()['v']
+    stock_scope=' AND bs.branch_id=?' if branch_id is not None else ''
+    low=c.execute("SELECT COUNT(*) n FROM branch_stock bs JOIN products p ON p.id=bs.product_id WHERE p.active=1 AND bs.qty<=bs.reorder_level"+stock_scope,(int(branch_id),) if branch_id is not None else ()).fetchone()['n']
+    recent_scope=' WHERE s.branch_id=?' if branch_id is not None else ''
+    recent_sales=[dict(r) for r in c.execute("SELECT s.receipt_no,s.sold_at,s.total,COALESCE(u.full_name,'') user_name,COALESCE(cu.full_name,'Walk-in Customer') customer FROM sales s LEFT JOIN users u ON u.id=s.user_id LEFT JOIN customers cu ON cu.id=s.customer_id"+recent_scope+" ORDER BY s.id DESC LIMIT 8",(int(branch_id),) if branch_id is not None else ())]
+    recent_purchases=[dict(r) for r in c.execute("SELECT purchase_no,purchased_at,total,supplier,COALESCE(u.full_name,'') user_name FROM purchases p JOIN users u ON u.id=p.user_id"+(" WHERE p.branch_id=?" if branch_id is not None else "")+" ORDER BY p.id DESC LIMIT 8",(int(branch_id),) if branch_id is not None else ())]
+    recent_expenses=[dict(r) for r in c.execute("SELECT expense_no,expense_date,amount,category,COALESCE(u.full_name,'') user_name FROM expenses e JOIN users u ON u.id=e.user_id"+(" WHERE e.branch_id=?" if branch_id is not None else "")+" ORDER BY e.id DESC LIMIT 8",(int(branch_id),) if branch_id is not None else ())]
     c.close(); return {'timestamp':now_str(),'active_users':active_users,'today_sales':k['sales'],'transactions':k['transactions'],'today_purchases':p['purchases'],'purchase_count':p['n'],'today_expenses':e['expenses'],'expense_count':e['n'],'mpesa':mp,'low_stock':low,'recent_sales':recent_sales,'recent_purchases':recent_purchases,'recent_expenses':recent_expenses}
 
-def report_data(start,end):
-    c=db.c(); rows=c.execute('''SELECT s.id sale_id,s.sale_type,s.receipt_no,s.sold_at,COALESCE(cu.full_name,'Walk-in Customer') customer,s.customer_type,COALESCE(u.full_name,'') attended_by,COALESCE(SUM(sl.qty),0) units,s.total,COALESCE((SELECT SUM(amount) FROM sale_payments WHERE sale_id=s.id AND payment_method='CASH'),0) cash,COALESCE((SELECT SUM(amount) FROM sale_payments WHERE sale_id=s.id AND payment_method='MPESA'),0) mpesa FROM sales s LEFT JOIN customers cu ON cu.id=s.customer_id LEFT JOIN users u ON u.id=s.user_id LEFT JOIN sale_lines sl ON sl.sale_id=s.id WHERE s.sold_at BETWEEN ? AND ? GROUP BY s.id ORDER BY s.sold_at DESC''',(start,end)).fetchall(); c.close(); return [dict(r) for r in rows]
+def report_data(start,end,branch_id=None):
+    c=db.c(); scope=' AND s.branch_id=?' if branch_id is not None else ''
+    args=(start,end,int(branch_id)) if branch_id is not None else (start,end)
+    rows=c.execute("""SELECT s.id sale_id,s.branch_id,s.sale_type,s.receipt_no,s.sold_at,COALESCE(cu.full_name,'Walk-in Customer') customer,s.customer_type,COALESCE(u.full_name,'') attended_by,COALESCE(SUM(sl.qty),0) units,s.total,COALESCE((SELECT SUM(amount) FROM sale_payments WHERE sale_id=s.id AND payment_method='CASH'),0) cash,COALESCE((SELECT SUM(amount) FROM sale_payments WHERE sale_id=s.id AND payment_method='MPESA'),0) mpesa FROM sales s LEFT JOIN customers cu ON cu.id=s.customer_id LEFT JOIN users u ON u.id=s.user_id LEFT JOIN sale_lines sl ON sl.sale_id=s.id WHERE s.sold_at BETWEEN ? AND ?"""+scope+" GROUP BY s.id ORDER BY s.sold_at DESC",args).fetchall(); c.close(); return [dict(r) for r in rows]
 
 def stock_report(start,end,branch_id=None):
     c=db.c()
@@ -653,53 +670,49 @@ def stock_report(start,end,branch_id=None):
     c.close(); return out
 
 
-def purchase_report_data(start,end):
-    c=db.c()
-    rows=c.execute("""SELECT p.purchase_no,p.purchased_at,p.supplier,p.payment_method,p.total,COALESCE(u.full_name,'') attended_by,COALESCE(SUM(pl.qty),0) units,p.reference FROM purchases p JOIN users u ON u.id=p.user_id LEFT JOIN purchase_lines pl ON pl.purchase_id=p.id WHERE p.purchased_at BETWEEN ? AND ? GROUP BY p.id ORDER BY p.purchased_at DESC""",(start,end)).fetchall()
-    c.close()
-    return [dict(r) for r in rows]
+def purchase_report_data(start,end,branch_id=None):
+    c=db.c(); scope=' AND p.branch_id=?' if branch_id is not None else ''
+    args=(start,end,int(branch_id)) if branch_id is not None else (start,end)
+    rows=c.execute("""SELECT p.purchase_no,p.purchased_at,p.supplier,p.payment_method,p.total,COALESCE(u.full_name,'') attended_by,COALESCE(SUM(pl.qty),0) units,p.reference,p.branch_id FROM purchases p JOIN users u ON u.id=p.user_id LEFT JOIN purchase_lines pl ON pl.purchase_id=p.id WHERE p.purchased_at BETWEEN ? AND ?"""+scope+" GROUP BY p.id ORDER BY p.purchased_at DESC",args).fetchall()
+    c.close(); return [dict(r) for r in rows]
 
-def expense_report_data(start,end):
-    c=db.c()
-    rows=c.execute("""SELECT e.id expense_id,e.expense_no,e.expense_date,e.category,e.description,e.amount,e.payment_method,e.reference,COALESCE(u.full_name,'') attended_by FROM expenses e JOIN users u ON u.id=e.user_id WHERE e.expense_date BETWEEN ? AND ? ORDER BY e.expense_date DESC""",(start,end)).fetchall()
-    c.close()
-    return [dict(r) for r in rows]
+def expense_report_data(start,end,branch_id=None):
+    c=db.c(); scope=' AND e.branch_id=?' if branch_id is not None else ''
+    args=(start,end,int(branch_id)) if branch_id is not None else (start,end)
+    rows=c.execute("""SELECT e.id expense_id,e.expense_no,e.expense_date,e.category,e.description,e.amount,e.payment_method,e.reference,COALESCE(u.full_name,'') attended_by,e.branch_id FROM expenses e JOIN users u ON u.id=e.user_id WHERE e.expense_date BETWEEN ? AND ?"""+scope+" ORDER BY e.expense_date DESC",args).fetchall()
+    c.close(); return [dict(r) for r in rows]
 
-def ledger_data(start,end):
-    c=db.c()
-    sales=c.execute('SELECT sold_at,receipt_no,total,customer_type FROM sales WHERE sold_at BETWEEN ? AND ?',(start,end)).fetchall()
-    purs=c.execute('SELECT purchased_at,purchase_no,total,supplier,payment_method FROM purchases WHERE purchased_at BETWEEN ? AND ?',(start,end)).fetchall()
-    ex=c.execute('SELECT expense_date,expense_no,amount,description,payment_method FROM expenses WHERE expense_date BETWEEN ? AND ?',(start,end)).fetchall()
-    c.close()
-    rows=[]
-    for r in sales:
-        rows.append([r['sold_at'],r['receipt_no'],'Sales Revenue','Cash / M-Pesa / Accounts Receivable',r['total'],'Sales Revenue',r['total']])
-    for r in purs:
-        rows.append([r['purchased_at'],r['purchase_no'],'Inventory Purchase','Inventory',r['total'],'Accounts Payable / Cash / M-Pesa',r['total']])
-    for r in ex:
-        rows.append([r['expense_date'],r['expense_no'],r['description'],'Expense',r['amount'],r['payment_method'],r['amount']])
-    rows.sort(key=lambda x:x[0], reverse=True)
-    return rows
+def ledger_data(start,end,branch_id=None):
+    c=db.c(); sales_scope=' AND branch_id=?' if branch_id is not None else ''
+    args=(start,end,int(branch_id)) if branch_id is not None else (start,end)
+    sales=c.execute('SELECT sold_at,receipt_no,total,customer_type FROM sales WHERE sold_at BETWEEN ? AND ?'+sales_scope,args).fetchall()
+    purs=c.execute('SELECT purchased_at,purchase_no,total,supplier,payment_method FROM purchases WHERE purchased_at BETWEEN ? AND ?'+sales_scope,args).fetchall()
+    ex=c.execute('SELECT expense_date,expense_no,amount,description,payment_method FROM expenses WHERE expense_date BETWEEN ? AND ?'+sales_scope,args).fetchall()
+    c.close(); rows=[]
+    for r in sales: rows.append([r['sold_at'],r['receipt_no'],'Sales Revenue','Cash / M-Pesa / Accounts Receivable',r['total'],'Sales Revenue',r['total']])
+    for r in purs: rows.append([r['purchased_at'],r['purchase_no'],'Inventory Purchase','Inventory',r['total'],'Accounts Payable / Cash / M-Pesa',r['total']])
+    for r in ex: rows.append([r['expense_date'],r['expense_no'],r['description'],'Expense',r['amount'],r['payment_method'],r['amount']])
+    rows.sort(key=lambda x:x[0],reverse=True); return rows
 
-def pl_summary(start,end):
-    """Profit and loss using the unit-cost snapshot stored on each sale line."""
-    c=db.c()
+def pl_summary(start,end,branch_id=None):
+    """Profit and loss using sale-time cost snapshots and optional branch scope."""
+    c=db.c(); scope=' AND s.branch_id=?' if branch_id is not None else ''
+    args=(start,end,int(branch_id)) if branch_id is not None else (start,end)
     try:
         r=c.execute("""SELECT COALESCE(SUM(s.total),0) revenue,
             COALESCE(SUM((SELECT COALESCE(SUM(sl.qty*sl.unit_cost),0) FROM sale_lines sl WHERE sl.sale_id=s.id)),0) cogs
-            FROM sales s WHERE s.sold_at BETWEEN ? AND ?""",(start,end)).fetchone()
-        e=c.execute('SELECT COALESCE(SUM(amount),0) v FROM expenses WHERE expense_date BETWEEN ? AND ?',(start,end)).fetchone()
+            FROM sales s WHERE s.sold_at BETWEEN ? AND ?"""+scope,args).fetchone()
+        expense_scope=' AND branch_id=?' if branch_id is not None else ''
+        eargs=(start,end,int(branch_id)) if branch_id is not None else (start,end)
+        e=c.execute('SELECT COALESCE(SUM(amount),0) v FROM expenses WHERE expense_date BETWEEN ? AND ?'+expense_scope,eargs).fetchone()
         coverage=c.execute("""SELECT COUNT(*) total_lines,
             SUM(CASE WHEN COALESCE(sl.cogs_cost_source,'RECORDED')='MISSING_COST' OR COALESCE(sl.unit_cost,0)<=0 THEN 1 ELSE 0 END) missing_lines,
             SUM(CASE WHEN COALESCE(sl.cogs_cost_source,'RECORDED')='ESTIMATED_CURRENT_AVG_COST' THEN 1 ELSE 0 END) estimated_lines
-            FROM sale_lines sl JOIN sales s ON s.id=sl.sale_id WHERE s.sold_at BETWEEN ? AND ?""",(start,end)).fetchone()
-    finally:
-        c.close()
+            FROM sale_lines sl JOIN sales s ON s.id=sl.sale_id WHERE s.sold_at BETWEEN ? AND ?"""+scope,args).fetchone()
+    finally: c.close()
     rev=float(r['revenue']); cogs=float(r['cogs']); exp=float(e['v']); gp=rev-cogs; np=gp-exp
     total_lines=int(coverage['total_lines'] or 0); missing_lines=int(coverage['missing_lines'] or 0); estimated_lines=int(coverage['estimated_lines'] or 0)
-    return {'revenue':rev,'cogs':cogs,'expenses':exp,'gross_profit':gp,'net_profit':np,
-            'cogs_lines':total_lines,'cogs_missing_lines':missing_lines,'cogs_estimated_lines':estimated_lines,
-            'cogs_coverage_pct':((total_lines-missing_lines-estimated_lines)/total_lines*100.0 if total_lines else 100.0)}
+    return {'revenue':rev,'cogs':cogs,'expenses':exp,'gross_profit':gp,'net_profit':np,'cogs_lines':total_lines,'cogs_missing_lines':missing_lines,'cogs_estimated_lines':estimated_lines,'cogs_coverage_pct':((total_lines-missing_lines-estimated_lines)/total_lines*100.0 if total_lines else 100.0)}
 
 def monthly_ranges(reference=None):
     base=reference or now()
