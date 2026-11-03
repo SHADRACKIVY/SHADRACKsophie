@@ -1130,7 +1130,7 @@ function toggleCreditChoice(){var el=document.querySelector('input[name="credit_
 function selectCustomer(id,name,phone,idNo,address){var choice=document.querySelector('input[name="credit_customer_choice"][value="EXISTING"]');if(choice)choice.checked=true;toggleCreditChoice();var hid=document.getElementById('selected_customer_id');if(hid)hid.value=String(id);var card=document.getElementById('selected_customer_card');if(card){card.style.display='block';card.innerHTML='<b>SELECTED EXISTING CUSTOMER</b><div>'+escapeHtml(name)+' · '+escapeHtml(phone||'')+'</div><div class="muted">ID: '+escapeHtml(idNo||'—')+' · '+escapeHtml(address||'')+'</div>';}var old=document.querySelector('#existing_customer_panel .selected-customer:not(#selected_customer_card)');if(old)old.style.display='none';var b=document.querySelector('button[name="customer_action"][value="SAVE_EXISTING_CUSTOMER"]');if(b)b.textContent='USE SELECTED CUSTOMER';}
 function searchCustomers(){var input=document.getElementById('customer_search'),box=document.getElementById('customer_search_results'),q=input?input.value.trim():'';if(!box)return;if(!q){box.innerHTML='<div class="flash error">Enter a customer name, ID number, or phone number.</div>';return;}box.innerHTML='<div class="muted">Searching registered customers…</div>';fetch('/api/customers/search?q='+encodeURIComponent(q),{headers:{'Accept':'application/json'},credentials:'same-origin',cache:'no-store'}).then(function(r){return r.text().then(function(raw){var d;try{d=JSON.parse(raw);}catch(e){throw new Error('Customer search did not return valid data. Refresh the page and sign in again.');}if(!r.ok)throw new Error(d.error||'Customer search failed.');return d;});}).then(function(d){var rows=d.results||[];if(!rows.length){box.innerHTML='<div class="flash error">No registered customer found. Check the spelling, ID number, or phone. Only register if this is genuinely a new customer.</div>';return;}box.innerHTML='<div class="search-results">'+rows.map(function(r){return '<div class="search-result"><div><b>'+escapeHtml(r.full_name)+'</b><div class="muted">ID: '+escapeHtml(r.id_no||'—')+' · Phone: '+escapeHtml(r.phone||'—')+'</div><div class="muted">'+escapeHtml(r.address||'')+'</div></div><button type="button" class="btn" data-customer-id="'+Number(r.id)+'">SELECT</button></div>';}).join('')+'</div>';box.querySelectorAll('button[data-customer-id]').forEach(function(b){b.addEventListener('click',function(){var r=rows.find(function(x){return Number(x.id)===Number(b.getAttribute('data-customer-id'));});if(r)selectCustomer(r.id,r.full_name,r.phone,r.id_no,r.address);});});}).catch(function(e){box.innerHTML='<div class="flash error">'+escapeHtml(e.message)+'</div>';});}
 function confirmDirectMpesa(i){var phoneEl=document.getElementById('mpesa_phone_'+i),phone=phoneEl?phoneEl.value.trim():'';var status=document.getElementById('mpesa_status_'+i),btn=document.getElementById('mpesa_confirm_'+i),csrf=document.querySelector('input[name=csrf]');var pp=document.getElementById('sale_product'),qq=document.getElementById('sale_qty');if(!phone){alert('Enter the customer M-Pesa phone number.');return;}if(!pp||!pp.value||!qq||!(parseInt(qq.value||'0',10)>0)){alert('Select the product and quantity first.');return;}status.textContent='Searching latest M-Pesa payment…';btn.disabled=true;var body=new URLSearchParams();body.set('csrf',csrf?csrf.value:'');body.set('phone',phone);body.set('product_id',pp.value);body.set('qty',qq.value);var st=document.getElementById('sale_type');body.set('sale_type',st?st.value:'RETAIL');var branchInput=document.querySelector('[name=branch_id]');body.set('branch_id',branchInput?branchInput.value:'');fetch('/api/mpesa/confirm-direct',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body.toString()}).then(function(r){return r.json().then(function(d){return {ok:r.ok,d:d};});}).then(function(x){if(!x.ok)throw new Error(x.d.error||'Unable to confirm payment.');var d=x.d;if(d.ok){status.textContent='PAYMENT CONFIRMED · SALE SAVED · '+d.receipt_no;window.location='/sales';return;}status.textContent=d.message||('Payment found: KSh '+Number(d.matched||0).toLocaleString('en-KE',{minimumFractionDigits:2})+' · Remaining: KSh '+Number(d.remaining||0).toLocaleString('en-KE',{minimumFractionDigits:2}));btn.disabled=false;}).catch(function(e){status.textContent=e.message;btn.disabled=false;});}
-function requestMpesa(i){var amt=parseFloat(document.getElementById('payment_amount_'+i).value||'0')||0;var phone=document.getElementById('mpesa_phone_'+i).value.trim();var status=document.getElementById('mpesa_status_'+i),btn=document.getElementById('mpesa_request_'+i),csrf=document.querySelector('input[name=csrf]');if(amt<=0){alert('Enter the payment amount first.');return;}if(!phone){alert('Enter the customer M-Pesa phone number.');return;}status.textContent='Sending M-Pesa prompt…';btn.disabled=true;var body=new URLSearchParams();body.set('csrf',csrf?csrf.value:'');body.set('amount',amt.toFixed(2));body.set('phone',phone);body.set('sequence_no',String(i));body.set('all_mpesa',Array.prototype.slice.call(document.querySelectorAll('select[name^=payment_method_]')).every(function(x){return x.value==='MPESA'})?'1':'');var pp=document.getElementById('sale_product');var qq=document.getElementById('sale_qty');if(pp&&qq){body.set('product_id',pp.value||'');body.set('qty',qq.value||'');var st=document.getElementById('sale_type');body.set('sale_type',st?st.value:'RETAIL');var branchInput=document.querySelector('[name=branch_id]');body.set('branch_id',branchInput?branchInput.value:'');var n=document.getElementById('payment_count');body.set('payment_count',n?n.value:'1');body.set('batch_id',(document.getElementById('mpesa_batch_id')||{}).value||'');var pprice=selectedProductPrice();body.set('total',(pprice*(parseFloat(qq.value||'0')||0)).toFixed(2));for(var j=1;j<=parseInt(n?n.value:'1',10);j++){var ai=document.getElementById('payment_amount_'+j);body.set('payment_amount_'+j,ai?ai.value:'0');}}fetch('/api/mpesa/stk-request',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body.toString()}).then(function(r){return r.json().then(function(d){return {ok:r.ok,d:d};});}).then(function(x){if(!x.ok)throw new Error(x.d.error||'Unable to send M-Pesa prompt.');status.textContent='Prompt sent. Waiting for customer payment…';if(x.d.batch_id){var bh=document.getElementById('mpesa_batch_id');if(bh)bh.value=x.d.batch_id;}var checkout=x.d.CheckoutRequestID||x.d.checkout_request_id,tries=0;var timer=setInterval(function(){tries++;fetch('/api/mpesa/stk-status?checkout_request_id='+encodeURIComponent(checkout),{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){if(d.status==='SUCCESS'&&d.mpesa_code){clearInterval(timer);document.getElementById('mpesa_code_'+i).value=d.mpesa_code;status.textContent=d.auto_saved?'PAYMENT RECEIVED · SALE SAVED AUTOMATICALLY · '+d.mpesa_code:'PAYMENT RECEIVED · M-Pesa code '+d.mpesa_code;btn.textContent=d.auto_saved?'SALE SAVED':'PAYMENT RECEIVED';if(d.auto_saved){window.location='/sales';return;}}else if(d.status==='FAILED'){clearInterval(timer);status.textContent='Payment failed: '+(d.message||'Customer did not complete payment.');btn.disabled=false;}else if(tries>=60){clearInterval(timer);status.textContent='Still pending. Check M-Pesa Monitor.';btn.disabled=false;}}).catch(function(){if(tries>=60){clearInterval(timer);status.textContent='Unable to check payment status.';btn.disabled=false;}});},2000);}).catch(function(e){status.textContent=e.message;btn.disabled=false;});}
+function requestMpesa(i){var amt=parseFloat(document.getElementById('payment_amount_'+i).value||'0')||0;var phone=document.getElementById('mpesa_phone_'+i).value.trim();var status=document.getElementById('mpesa_status_'+i),btn=document.getElementById('mpesa_request_'+i),csrf=document.querySelector('input[name=csrf]');if(amt<=0){alert('Enter the payment amount first.');return;}if(!phone){alert('Enter the customer M-Pesa phone number.');return;}status.textContent='Sending M-Pesa prompt…';btn.disabled=true;var body=new URLSearchParams();body.set('csrf',csrf?csrf.value:'');body.set('amount',amt.toFixed(2));body.set('phone',phone);body.set('sequence_no',String(i));body.set('all_mpesa',Array.prototype.slice.call(document.querySelectorAll('select[name^=payment_method_]')).every(function(x){return x.value==='MPESA'})?'1':'');var pp=document.getElementById('sale_product');var qq=document.getElementById('sale_qty');if(pp&&qq){body.set('product_id',pp.value||'');body.set('qty',qq.value||'');var st=document.getElementById('sale_type');body.set('sale_type',st?st.value:'RETAIL');var branchInput=document.querySelector('[name=branch_id]');body.set('branch_id',branchInput?branchInput.value:'');var n=document.getElementById('payment_count');body.set('payment_count',n?n.value:'1');body.set('batch_id',(document.getElementById('mpesa_batch_id')||{}).value||'');var pprice=selectedProductPrice();body.set('total',(pprice*(parseFloat(qq.value||'0')||0)).toFixed(2));for(var j=1;j<=parseInt(n?n.value:'1',10);j++){var ai=document.getElementById('payment_amount_'+j);body.set('payment_amount_'+j,ai?ai.value:'0');}}fetch('/api/mpesa/stk-request',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body.toString()}).then(function(r){return r.json().then(function(d){return {ok:r.ok,d:d};});}).then(function(x){if(!x.ok)throw new Error(x.d.error||'Unable to send M-Pesa prompt.');status.textContent='Prompt sent. Waiting for customer payment…';if(x.d.batch_id){var bh=document.getElementById('mpesa_batch_id');if(bh)bh.value=x.d.batch_id;}var checkout=x.d.CheckoutRequestID||x.d.checkout_request_id,tries=0;var timer=setInterval(function(){tries++;fetch('/api/mpesa/stk-status?checkout_request_id='+encodeURIComponent(checkout),{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){if(d.status==='SUCCESS'&&d.mpesa_code){clearInterval(timer);document.getElementById('mpesa_code_'+i).value=d.mpesa_code;status.textContent=d.message||(d.auto_saved?'PAYMENT RECEIVED · SALE SAVED AUTOMATICALLY · '+d.mpesa_code:'PAYMENT RECEIVED · M-Pesa code '+d.mpesa_code+' · Click SAVE SALE to finish.');btn.textContent=d.auto_saved?'SALE SAVED':'PAYMENT RECEIVED';btn.disabled=false;if(d.auto_saved){window.location='/sales';return;}}else if(d.status==='FAILED'||d.status==='REVIEW'){clearInterval(timer);status.textContent=d.message||'M-Pesa payment needs Administrator review.';btn.disabled=false;}else if(tries>=60){clearInterval(timer);status.textContent='Still pending. Check M-Pesa Monitor.';btn.disabled=false;}}).catch(function(){if(tries>=60){clearInterval(timer);status.textContent='Unable to check payment status.';btn.disabled=false;}});},2000);}).catch(function(e){status.textContent=e.message;btn.disabled=false;});}
 function escapeHtml(v){return String(v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
 window.addEventListener('DOMContentLoaded',function(){renderPaymentRows();showRegisteredPrice();toggleCustomerMode();if(document.getElementById('selected_customer_id').value){document.getElementById('customer_mode').value='CREDIT';document.querySelector('input[value="EXISTING"]').checked=true;toggleCustomerMode();toggleCreditChoice();}var form=document.getElementById('sales_form');if(form){form.addEventListener('submit',function(ev){var mode=document.getElementById('customer_mode').value;if(mode==='CREDIT'){if(!document.getElementById('due_date').value||!document.getElementById('collateral').value.trim()){ev.preventDefault();alert('Credit invoices require a due date and collateral details.');return;}}else{var count=parseInt(document.getElementById('payment_count').value||'1',10);for(var i=1;i<=count;i++){var m=document.getElementById('payment_method_'+i),c=document.getElementById('mpesa_code_'+i);if(__REQUIRE_MPESA_CODE__&&m&&m.value==='MPESA'&&c&&!c.value.trim()){ev.preventDefault();c.required=true;c.focus();alert('Enter the M-Pesa transaction code for every M-Pesa payment.');return;}}}});}});
 </script>'''
@@ -1717,6 +1717,7 @@ def mpesa_stk_request(u, amount, phone, batch_payload=None, sequence_no=1):
     if core.get_setting('mpesa_enabled','NO')!='YES': raise mpesa.MpesaError('M-Pesa integration is disabled in Administrator Settings.')
     amt=float(amount); phone_n=mpesa.normalize_phone(phone)
     if amt<=0: raise mpesa.MpesaError('Payment amount must be greater than zero.')
+    if abs(amt-round(amt))>0.009: raise mpesa.MpesaError('M-Pesa STK amounts must be whole Kenyan shillings. Use a whole-shilling split or direct Till/Paybill payment.')
     c=core.db.c(); ts=core.now_str(); batch_id=None
     role=role_name(u); branch_id=int((batch_payload or {}).get('branch_id','0') or 0) if role in ('ADMIN','MANAGEMENT') else int(u.get('branch_id') or 0)
     if not branch_id: c.close(); raise mpesa.MpesaError('Select an active branch before requesting an M-Pesa prompt.')
@@ -1800,12 +1801,22 @@ def mpesa_confirm_direct_payment(u, form):
     finally: c.close()
 
 def mpesa_stk_status(checkout,u=None,query=None):
-    c=core.db.c(); r=c.execute('SELECT checkout_request_id,status,mpesa_code,amount,phone,transaction_date,sale_id,branch_id FROM mpesa_stk_requests WHERE checkout_request_id=?',(checkout,)).fetchone(); c.close()
+    c=core.db.c(); r=c.execute('SELECT checkout_request_id,status,mpesa_code,amount,phone,transaction_date,sale_id,branch_id,raw_response FROM mpesa_stk_requests WHERE checkout_request_id=?',(checkout,)).fetchone(); c.close()
     if not r: return {'status':'NOT_FOUND'}
     if u:
         bid=branch_scope_for(u,query)
         if bid is not None and int(r['branch_id'] or 0)!=int(bid): return {'status':'NOT_FOUND'}
-    d=dict(r); d['auto_saved']=bool(d.get('sale_id'))
+    d=dict(r); raw={}
+    try: raw=json.loads(d.pop('raw_response') or '{}')
+    except Exception: d.pop('raw_response',None)
+    d['auto_saved']=bool(d.get('sale_id'))
+    if d['status']=='REVIEW':
+        d['message']='M-Pesa reported a payment, but the amount or phone did not match this prompt. Do not record it as paid; ask Administrator to reconcile it.'
+    elif d['status']=='FAILED':
+        cb=raw.get('Body',{}).get('stkCallback',{})
+        d['message']=cb.get('ResultDesc') or 'Customer did not complete the M-Pesa payment.'
+    elif d['status']=='SUCCESS' and not d['auto_saved']:
+        d['message']='Payment confirmed. Review the receipt code and click SAVE SALE to complete this mixed-payment sale.'
     return d
 
 def finalize_pending_mpesa_batch(batch_id):
@@ -1831,19 +1842,36 @@ def finalize_pending_mpesa_batch(batch_id):
     c=core.db.c(); ts=core.now_str(); c.execute('UPDATE pending_payment_batches SET status="COMPLETED",created_sale_id=?,updated_at=? WHERE id=?',(sale['sale_id'],ts,batch_id)); c.execute('UPDATE mpesa_stk_requests SET sale_id=?,updated_at=? WHERE checkout_request_id IN (SELECT checkout_request_id FROM pending_payment_allocations WHERE batch_id=?)',(sale['sale_id'],ts,batch_id)); c.commit(); c.close(); return sale
 
 def mpesa_receive_stk(payload):
-    d=mpesa.parse_stk_callback(payload); c=core.db.c(); r=c.execute('SELECT id FROM mpesa_stk_requests WHERE checkout_request_id=?',(d['checkout_request_id'],)).fetchone(); status='PENDING'
-    if r:
-        status='SUCCESS' if d['result_code']==0 and d['mpesa_code'] else ('FAILED' if d['result_code']!=0 else 'PENDING')
-        ts=core.now_str(); c.execute('UPDATE mpesa_stk_requests SET status=?,mpesa_code=?,transaction_date=?,raw_response=?,updated_at=? WHERE checkout_request_id=?',(status,d['mpesa_code'],d['transaction_date'],json.dumps(payload,ensure_ascii=False),ts,d['checkout_request_id']))
-        if status=='SUCCESS':
-            a=c.execute('SELECT id,batch_id FROM pending_payment_allocations WHERE checkout_request_id=?',(d['checkout_request_id'],)).fetchone()
-            if a: c.execute('UPDATE pending_payment_allocations SET status="SUCCESS",mpesa_code=?,updated_at=? WHERE id=?',(d['mpesa_code'],ts,a['id']))
-    c.commit(); c.close()
+    d=mpesa.parse_stk_callback(payload)
+    c=core.db.c()
+    try:
+        r=c.execute('SELECT id,amount,phone FROM mpesa_stk_requests WHERE checkout_request_id=?',(d['checkout_request_id'],)).fetchone()
+        status='PENDING'; ts=core.now_str()
+        if r:
+            if d['result_code']!=0:
+                status='FAILED'
+            elif not d['mpesa_code']:
+                status='PENDING'
+            else:
+                amount_ok=d['amount']>0 and abs(float(d['amount'])-float(r['amount']))<0.009
+                phone_ok=True
+                if d['phone']:
+                    try: phone_ok=mpesa.normalize_phone(d['phone'])==mpesa.normalize_phone(r['phone'])
+                    except Exception: phone_ok=False
+                status='SUCCESS' if amount_ok and phone_ok else 'REVIEW'
+            c.execute('UPDATE mpesa_stk_requests SET status=?,mpesa_code=?,transaction_date=?,raw_response=?,updated_at=? WHERE checkout_request_id=?',(status,d['mpesa_code'],d['transaction_date'],json.dumps(payload,ensure_ascii=False),ts,d['checkout_request_id']))
+            if status=='SUCCESS':
+                a=c.execute('SELECT id,batch_id FROM pending_payment_allocations WHERE checkout_request_id=?',(d['checkout_request_id'],)).fetchone()
+                if a: c.execute('UPDATE pending_payment_allocations SET status="SUCCESS",mpesa_code=?,updated_at=? WHERE id=?',(d['mpesa_code'],ts,a['id']))
+        c.commit()
+    except Exception:
+        c.rollback(); raise
+    finally: c.close()
     sale=None
     if status=='SUCCESS':
         c2=core.db.c(); a2=c2.execute('SELECT batch_id FROM pending_payment_allocations WHERE checkout_request_id=?',(d['checkout_request_id'],)).fetchone(); c2.close()
         if a2: sale=finalize_pending_mpesa_batch(a2['batch_id'])
-    d['auto_saved']=bool(sale); d['sale_id']=sale['sale_id'] if sale else None
+    d['auto_saved']=bool(sale); d['sale_id']=sale['sale_id'] if sale else None; d['status']=status
     return d
 
 def mpesa_receive_c2b(payload):
@@ -2982,7 +3010,7 @@ class Handler(BaseHTTPRequestHandler):
                 if src: src.close()
             except Exception: pass
         with open(dest,'rb') as f: data=f.read()
-        if not data.startswith(b'SQLite format 3\\x00'):
+        if not data.startswith(b'SQLite format 3\x00'):
             try: os.remove(dest)
             except OSError: pass
             raise RuntimeError('The generated backup is not a valid SQLite database.')
