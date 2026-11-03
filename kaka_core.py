@@ -66,7 +66,7 @@ class DB:
                 finally: dst.close(); src.close()
         c=self.c(); c.executescript('''
         CREATE TABLE IF NOT EXISTS branches(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL UNIQUE,code TEXT UNIQUE,location TEXT NOT NULL DEFAULT '',phone TEXT NOT NULL DEFAULT '',active INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY AUTOINCREMENT,username TEXT UNIQUE NOT NULL,full_name TEXT NOT NULL,password_hash TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('ADMIN','SALES')),access_role TEXT NOT NULL DEFAULT 'SALES',active INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,branch_id INTEGER REFERENCES branches(id));
+        CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY AUTOINCREMENT,username TEXT UNIQUE NOT NULL,full_name TEXT NOT NULL,password_hash TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('ADMIN','SALES')),access_role TEXT NOT NULL DEFAULT 'SALES',active INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,branch_id INTEGER REFERENCES branches(id),home_branch_id INTEGER REFERENCES branches(id));
         CREATE TABLE IF NOT EXISTS products(id INTEGER PRIMARY KEY AUTOINCREMENT,product_no TEXT UNIQUE,sku TEXT UNIQUE NOT NULL,name TEXT UNIQUE NOT NULL,category TEXT NOT NULL,unit TEXT NOT NULL,sell_price REAL NOT NULL,wholesale_price REAL NOT NULL DEFAULT 0,avg_cost REAL NOT NULL DEFAULT 0,stock_qty REAL NOT NULL DEFAULT 0,reorder_level REAL NOT NULL DEFAULT 5,active INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS customers(id INTEGER PRIMARY KEY AUTOINCREMENT,customer_no TEXT UNIQUE NOT NULL,full_name TEXT NOT NULL,phone TEXT UNIQUE NOT NULL,id_no TEXT,address TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1);
         CREATE TABLE IF NOT EXISTS sales(id INTEGER PRIMARY KEY AUTOINCREMENT,receipt_no TEXT UNIQUE NOT NULL,sold_at TEXT NOT NULL,user_id INTEGER NOT NULL REFERENCES users(id),customer_id INTEGER REFERENCES customers(id),customer_type TEXT NOT NULL,total REAL NOT NULL,sale_type TEXT NOT NULL DEFAULT 'RETAIL',branch_id INTEGER REFERENCES branches(id));
@@ -119,6 +119,10 @@ class DB:
         user_cols={r['name'] for r in c.execute('PRAGMA table_info(users)').fetchall()}
         if 'branch_id' not in user_cols:
             c.execute('ALTER TABLE users ADD COLUMN branch_id INTEGER REFERENCES branches(id)')
+        if 'home_branch_id' not in user_cols:
+            c.execute('ALTER TABLE users ADD COLUMN home_branch_id INTEGER REFERENCES branches(id)')
+        # Freeze the first assigned outlet for every existing branch-bound account.
+        c.execute('UPDATE users SET home_branch_id=branch_id WHERE home_branch_id IS NULL AND branch_id IS NOT NULL')
         sales_cols={r['name'] for r in c.execute('PRAGMA table_info(sales)').fetchall()}
         if 'branch_id' not in sales_cols:
             c.execute('ALTER TABLE sales ADD COLUMN branch_id INTEGER REFERENCES branches(id)')
@@ -344,7 +348,7 @@ def update_settings(u, values):
             oldrow=c.execute('SELECT value FROM settings WHERE key=?',(k,)).fetchone()
             oldvalue=oldrow['value'] if oldrow else ''
             if oldvalue != vv: changed_keys.append(k)
-            if k in ('idle_timeout_seconds','idle_timeout_minutes','live_refresh_seconds','default_reorder_level','default_payment_transactions','max_payment_transactions','report_default_days','performance_green_threshold_pct'):
+            if k in ('idle_timeout_seconds','idle_timeout_minutes','live_refresh_seconds','default_reorder_level','default_payment_transactions','max_payment_transactions','report_default_days','performance_green_threshold_pct','mpesa_recovery_match_window_minutes'):
                 n=int(float(vv))
                 if k=='idle_timeout_seconds' and not 30<=n<=7200: raise ValueError('Idle timeout must be between 30 and 7200 seconds.')
                 if k=='idle_timeout_minutes' and not 1<=n<=120: raise ValueError('Idle logout must be between 1 and 120 minutes.')
@@ -364,10 +368,22 @@ def update_settings(u, values):
                 except (TypeError,ValueError): raise ValueError('Enter a valid monthly subscription amount in KSh.')
                 if not (0 < amount <= 10000000): raise ValueError('Monthly subscription amount must be greater than zero and not exceed KSh 10,000,000.')
                 vv=f'{amount:.2f}'
-            if k in ('allow_credit_sales','require_mpesa_code','dashboard_enabled'):
+            if k in ('allow_credit_sales','require_mpesa_code','dashboard_enabled','mpesa_enabled','ai_assistant_enabled'):
                 vv=vv.upper()
                 if vv not in ('YES','NO'): raise ValueError(f'{k} must be YES or NO.')
-            if not vv and k in ('business_name','currency','receipt_prefix'): raise ValueError(f'{k} cannot be blank.')
+            if k=='mpesa_environment':
+                vv=vv.lower()
+                if vv not in ('sandbox','production'): raise ValueError('M-Pesa environment must be SANDBOX or PRODUCTION.')
+            if k=='mpesa_shortcode_type':
+                vv=vv.upper()
+                if vv not in ('PAYBILL','TILL'): raise ValueError('M-Pesa shortcode type must be PAYBILL or TILL.')
+            if k=='ai_provider':
+                vv=vv.upper()
+                if vv not in ('LOCAL','OPENAI'): raise ValueError('AI provider must be LOCAL or OPENAI.')
+            if k=='performance_basis':
+                vv=vv.upper()
+                if vv not in ('NET_PROFIT_MARGIN','GROSS_PROFIT_MARGIN','SALES_LESS_EXPENSES'): raise ValueError('Select a supported business performance basis.')
+            if k in ('default_unit','business_name','currency','receipt_prefix') and not vv: raise ValueError(f'{k} cannot be blank.')
             c.execute('INSERT INTO settings(key,value,updated_at,updated_by) VALUES(?,?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at,updated_by=excluded.updated_by',(k,vv,t,u['id']))
         db.audit(c,u,'UPDATE','SETTINGS','',f'reason={change_reason}; changed_keys={",".join(sorted(set(changed_keys))) or "no direct value changes"}')
         c.commit()
@@ -440,23 +456,38 @@ def permissions_payload(admin):
     overrides={str(u['id']):{r['key']:bool(r['enabled']) for r in c.execute('SELECT key,enabled FROM user_permissions WHERE user_id=?',(u['id'],)).fetchall()} for u in users if str(u.get('role'))!='ADMIN'}
     c.close(); return {'definitions':defs,'roles':roles,'users':users,'user_overrides':overrides}
 
+def _permission_enabled(value):
+    if isinstance(value,bool): return value
+    return str(value or '').strip().lower() in ('1','true','yes','on','enabled')
+
+ADMIN_ONLY_PERMISSION_KEYS={'MANAGE_USERS','MANAGE_SETTINGS','BACKUP_DATA','VIEW_AUDIT'}
+MANAGEMENT_UNSUPPORTED_PERMISSION_KEYS={'MANAGE_PRODUCTS'}
+
 def update_permissions(admin,data):
     if role_name(admin)!='ADMIN': raise PermissionError('Administrator permission required.')
     c=db.c()
     try:
         c.execute('BEGIN')
         for role in ('MANAGEMENT','SALES'):
-            for key,val in ((data.get('roles') or {}).get(role,{}) or {}).items():
-                if c.execute('SELECT 1 FROM permissions WHERE key=?',(key,)).fetchone():
-                    c.execute('UPDATE role_permissions SET enabled=? WHERE role=? AND key=?',(1 if bool(val) else 0,role,key))
+            mapping=((data.get('roles') or {}).get(role,{}) or {})
+            for row in c.execute('SELECT key FROM permissions').fetchall():
+                key=row['key']
+                enabled=_permission_enabled(mapping.get(key,False))
+                if key in ADMIN_ONLY_PERMISSION_KEYS or (role=='MANAGEMENT' and key in MANAGEMENT_UNSUPPORTED_PERMISSION_KEYS):
+                    enabled=False
+                c.execute('INSERT INTO role_permissions(role,key,enabled) VALUES(?,?,?) ON CONFLICT(role,key) DO UPDATE SET enabled=excluded.enabled',(role,key,1 if enabled else 0))
         for uid,mapping in ((data.get('users') or {}) or {}).items():
             try: user_id=int(uid)
             except Exception: continue
             user=c.execute('SELECT id,access_role FROM users WHERE id=?',(user_id,)).fetchone()
             if not user or user['access_role']=='ADMIN': continue
             for key,val in (mapping or {}).items():
-                if c.execute('SELECT 1 FROM permissions WHERE key=?',(key,)).fetchone():
-                    c.execute('INSERT INTO user_permissions(user_id,key,enabled) VALUES(?,?,?) ON CONFLICT(user_id,key) DO UPDATE SET enabled=excluded.enabled',(user_id,key,1 if bool(val) else 0))
+                if not c.execute('SELECT 1 FROM permissions WHERE key=?',(key,)).fetchone(): continue
+                if key in ADMIN_ONLY_PERMISSION_KEYS or (user['access_role']=='MANAGEMENT' and key in MANAGEMENT_UNSUPPORTED_PERMISSION_KEYS):
+                    enabled=False
+                else:
+                    enabled=_permission_enabled(val)
+                c.execute('INSERT INTO user_permissions(user_id,key,enabled) VALUES(?,?,?) ON CONFLICT(user_id,key) DO UPDATE SET enabled=excluded.enabled',(user_id,key,1 if enabled else 0))
         db.audit(c,admin,'UPDATE','PERMISSIONS','',json.dumps(data,ensure_ascii=False)); c.commit()
     except Exception:
         c.rollback(); raise
