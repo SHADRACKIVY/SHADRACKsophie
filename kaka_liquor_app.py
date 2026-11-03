@@ -835,25 +835,118 @@ def html_table(headers, rows, empty='No records.'):
 
 
 def make_pdf(title, headers, rows):
-    # Simple, standards-compliant one-page text PDF using only Python stdlib.
+    """Create a paginated, landscape, text-based business report PDF (never a screenshot)."""
     st=core.get_settings()
-    lines=[st.get('business_name',APP_NAME), st.get('business_branch_name',''), st.get('business_phone',''), st.get('business_address',''), st.get('business_website',''), ('KRA PIN: '+st.get('business_tax_pin','')) if st.get('business_tax_pin','') else '', title, now(), ' | '.join(map(str,headers))]
-    if st.get('report_footer','').strip(): lines.append(st['report_footer'].strip())
-    lines += [' | '.join(map(str,r)) for r in rows[:48]]
-    def pdf_escape(s): return str(s).replace('\\','\\\\').replace('(','\\(').replace(')','\\)').replace('\n',' ')
-    y=760; content=['BT /F1 8 Tf 36 760 Td']
-    for line in lines:
-        content.append(f'({pdf_escape(line)}) Tj 0 -12 Td')
-    content.append('ET'); stream='\n'.join(content).encode('latin-1','replace')
-    objs=[b'<< /Type /Catalog /Pages 2 0 R >>',b'<< /Type /Pages /Kids [3 0 R] /Count 1 >>',b'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',f'<< /Length {len(stream)} >>\nstream\n'.encode()+stream+b'\nendstream']
-    out=io.BytesIO(); out.write(b'%PDF-1.4\n'); offsets=[0]
-    for i,obj in enumerate(objs,1):
-        offsets.append(out.tell()); out.write(f'{i} 0 obj\n'.encode()); out.write(obj); out.write(b'\nendobj\n')
-    xref=out.tell(); out.write(f'xref\n0 {len(objs)+1}\n0000000000 65535 f \n'.encode())
+    rows=[list(r) for r in rows]
+    wide=len(headers)>9
+    page_w,page_h=(1191,842) if wide else (842,595)
+    margin=34
+    usable=page_w-2*margin
+    # Allocate more space to descriptive columns while retaining a readable minimum.
+    weights=[]
+    for i,h in enumerate(headers):
+        samples=[str(r[i] if i<len(r) else '') for r in rows[:120]]
+        weights.append(max(8,min(30,max([len(str(h))]+[min(len(x),30) for x in samples])*.72)))
+    minw=34 if wide else 48
+    widths=[max(minw,usable*w/sum(weights)) for w in weights]
+    scale=usable/sum(widths); widths=[w*scale for w in widths]
+    def clean(v):
+        s=str(v if v is not None else '')
+        s=s.replace('KES ','').replace('\u00a0',' ')
+        return s.encode('latin-1','replace').decode('latin-1')
+    def esc(v):
+        return clean(v).replace('\\','\\\\').replace('(','\\(').replace(')','\\)').replace('\r',' ').replace('\n',' ')
+    def wrap(value, width, size):
+        text=clean(value)
+        limit=max(4,int((width-8)/(size*.50)))
+        words=text.split()
+        out=[]; line=''
+        for word in words:
+            while len(word)>limit:
+                if line: out.append(line); line=''
+                out.append(word[:limit]); word=word[limit:]
+            candidate=(line+' '+word).strip()
+            if len(candidate)>limit and line:
+                out.append(line); line=word
+            else: line=candidate
+        if line or not out: out.append(line)
+        return out
+    pages=[]
+    body_rows=rows or [['No records found for the selected period.']]
+    chunks=[]; current=[]; estimated=0
+    for row in body_rows:
+        cells=[]
+        for i in range(len(headers)):
+            value=row[i] if i<len(row) else ''
+            cells.append(wrap(value,widths[i],6.4 if wide else 7.2))
+        row_h=max(18,max(len(c) for c in cells)*(8 if wide else 9)+7)
+        if current and estimated+row_h>page_h-155:
+            chunks.append(current); current=[]; estimated=0
+        current.append((cells,row_h)); estimated+=row_h
+    if current: chunks.append(current)
+    if not chunks: chunks=[[]]
+    for page_no,chunk in enumerate(chunks,1):
+        cmds=[]
+        def rect(x,y,w,h,fill=None,stroke=None):
+            if fill: cmds.append(f'{fill[0]} {fill[1]} {fill[2]} rg')
+            if stroke: cmds.append(f'{stroke[0]} {stroke[1]} {stroke[2]} RG 0.45 w')
+            op='B' if fill and stroke else ('f' if fill else 'S')
+            cmds.append(f'{x:.2f} {y:.2f} {w:.2f} {h:.2f} re {op}')
+        def txt(x,y,text,size=8,bold=False,rgb=(.12,.18,.15)):
+            cmds.append(f'{rgb[0]} {rgb[1]} {rgb[2]} rg BT /{"F2" if bold else "F1"} {size} Tf {x:.2f} {y:.2f} Td ({esc(text)}) Tj ET')
+        y=page_h-38
+        txt(margin,y,st.get('business_name',APP_NAME),16,True,(.05,.22,.16)); y-=19
+        identity='  |  '.join(x for x in [st.get('business_branch_name',''),st.get('business_phone',''),st.get('business_address',''),st.get('business_website','')] if x)
+        if identity: txt(margin,y,identity,7); y-=13
+        if st.get('business_tax_pin'): txt(margin,y,'KRA PIN: '+st.get('business_tax_pin',''),7); y-=13
+        txt(margin,y,clean(title),12,True,(.05,.22,.16)); y-=16
+        txt(margin,y,'Generated: '+now()+'    |    Page '+str(page_no)+' of '+str(len(chunks)),7); y-=20
+        x=margin; header_h=24
+        rect(margin,y-header_h,usable,header_h,(.05,.22,.16),(.05,.22,.16))
+        for i,h in enumerate(headers):
+            txt(x+4,y-15,wrap(h,widths[i]-4,7)[0],6.8,True,(1,1,1)); x+=widths[i]
+        y-=header_h
+        for ridx,(cells,row_h) in enumerate(chunk):
+            x=margin
+            rect(margin,y-row_h,usable,row_h,(.965,.975,.968) if ridx%2==0 else (1,1,1),(.83,.87,.84))
+            for i,lines in enumerate(cells):
+                for j,line in enumerate(lines):
+                    if j* (8 if wide else 9) >= row_h-4: break
+                    txt(x+4,y-11-j*(8 if wide else 9),line,6.4 if wide else 7.2,False)
+                x+=widths[i]
+            # Vertical rules keep columns distinct.
+            x=margin
+            for w in widths[:-1]:
+                x+=w; cmds.append(f'.86 .89 .87 RG .35 w {x:.2f} {y-row_h:.2f} m {x:.2f} {y:.2f} l S')
+            y-=row_h
+        footer=st.get('report_footer','').strip()
+        if footer: txt(margin,22,footer[:180],7)
+        txt(page_w-margin-130,22,'MONTEZ LIQUOR  |  CONFIDENTIAL',6,False,(.35,.4,.37))
+        stream='\n'.join(cmds).encode('latin-1','replace')
+        pages.append(stream)
+    # Assemble a valid multi-page PDF with reusable Helvetica fonts.
+    objects=[None,None]
+    page_ids=[]
+    for stream in pages:
+        page_id=len(objects)+1; content_id=page_id+1; page_ids.append(page_id)
+        objects.append(f'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {page_w} {page_h}] /Resources << /Font << /F1 {len(objects)+3} 0 R /F2 {len(objects)+4} 0 R >> >> /Contents {content_id} 0 R >>'.encode())
+        objects.append(f'<< /Length {len(stream)} >>\nstream\n'.encode()+stream+b'\nendstream')
+    font1=len(objects)+1; objects.append(b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>')
+    font2=len(objects)+1; objects.append(b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>')
+    objects[0]=b'<< /Type /Catalog /Pages 2 0 R >>'
+    kids=' '.join(f'{i} 0 R' for i in page_ids)
+    objects[1]=f'<< /Type /Pages /Kids [{kids}] /Count {len(page_ids)} >>'.encode()
+    # Correct page font references after object numbering is final.
+    for idx,pid in enumerate(page_ids):
+        content_id=pid+1
+        objects[pid-1]=f'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {page_w} {page_h}] /Resources << /Font << /F1 {font1} 0 R /F2 {font2} 0 R >> >> /Contents {content_id} 0 R >>'.encode()
+    out=io.BytesIO(); out.write(b'%PDF-1.4\n%MONTEZ-REPORT\n'); offsets=[0]
+    for n,obj in enumerate(objects,1):
+        offsets.append(out.tell()); out.write(f'{n} 0 obj\n'.encode()); out.write(obj); out.write(b'\nendobj\n')
+    xref=out.tell(); out.write(f'xref\n0 {len(objects)+1}\n0000000000 65535 f \n'.encode())
     for off in offsets[1:]: out.write(f'{off:010d} 00000 n \n'.encode())
-    out.write(f'trailer\n<< /Size {len(objs)+1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF'.encode())
+    out.write(f'trailer\n<< /Size {len(objects)+1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF'.encode())
     return out.getvalue()
-
 
 def report_rows(start, end): return core.report_data(start,end)
 
@@ -863,7 +956,7 @@ def build_xlsx(title, headers, rows): return core.xlsx_bytes(title,headers,rows)
 
 CSS = r'''
 :root{--bg:#f4f7f5;--card:#fff;--ink:#18241f;--muted:#68756f;--line:#dfe8e3;--green:#0d3b2f;--green2:#164f40;--gold:#d7ae5c;--red:#a92f33;--good:#1a6a49}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:Segoe UI,Arial,sans-serif}a{color:inherit;text-decoration:none}button,input,select{font:inherit}button{cursor:pointer}.sidebar{position:fixed;left:0;top:0;bottom:0;width:248px;background:linear-gradient(180deg,#0b3026,#123e31);color:#e9f2ee;padding:18px 14px;display:flex;flex-direction:column;z-index:20}.brand{display:flex;gap:10px;align-items:center;padding:5px 6px 18px}.brand img{width:46px;height:46px}.brand b{display:block;font-size:16px}.brand small{display:block;font-size:9px;letter-spacing:1.5px;color:#c8ddd5}.sidebar nav{display:flex;flex-direction:column;gap:4px;overflow:auto}.nav{padding:10px 12px;border-radius:9px;color:#dcebe5;font-size:13px}.nav:hover,.nav.active{background:#1b5444}.nav.logout{background:#7f292d;margin-top:4px}.side-bottom{margin-top:auto}.userbox{background:#174739;border:1px solid #2c6655;padding:11px;border-radius:10px;margin-bottom:7px;font-size:12px}.userbox b{font-size:13px}.userbox span{display:block;color:#bdd0c9;margin-top:2px}.mobile-head{display:none}main{margin-left:248px;padding:20px;min-height:100vh}.topbar{display:flex;justify-content:space-between;align-items:start;margin-bottom:18px}.topbar h1{margin:0 0 4px;font-size:27px}.clock{font-size:12px;background:#fff;border:1px solid var(--line);padding:9px 11px;border-radius:9px;font-weight:700}.muted{color:var(--muted);font-size:12px}.grid{display:grid;gap:14px}.two{grid-template-columns:repeat(2,1fr)}.three{grid-template-columns:repeat(3,1fr)}.four{grid-template-columns:repeat(4,1fr)}.card{background:var(--card);border:1px solid var(--line);border-radius:15px;padding:16px;box-shadow:0 5px 18px rgba(17,46,36,.05)}.kpis{grid-template-columns:repeat(6,1fr)}.kpi .label{font-size:11px;color:var(--muted)}.kpi strong{display:block;font-size:22px;margin-top:5px}.section-head,.report-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:11px}.section-head h2,.section-head h3{margin:0}.pill{font-size:10px;padding:5px 8px;border-radius:99px;background:#edf4f0;color:var(--green)}.btn{display:inline-block;border:1px solid #ccd8d2;background:#fff;color:var(--ink);border-radius:9px;padding:9px 12px;font-weight:700}.btn.primary{background:var(--green);color:#fff;border-color:var(--green)}.btn.gold{background:var(--gold);border-color:var(--gold);color:#221908}.btn.danger{background:var(--red);color:#fff;border-color:var(--red)}.movement-controls{position:static!important;z-index:auto!important;background:transparent!important;padding:0!important;margin:0 0 14px!important;display:flex;gap:8px;flex-wrap:wrap}.movement-controls .btn{min-height:40px}.full{width:100%}.form-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.field label,label{display:block;font-size:12px;font-weight:700;margin-bottom:5px}.field input,.field select,input,select{width:100%;padding:10px;border:1px solid #ccd8d2;border-radius:8px;background:#fff}.actions{display:flex;gap:8px;flex-wrap:wrap}.table-wrap{overflow:auto}.table-wrap table{width:100%;border-collapse:collapse;font-size:12px}.table-wrap th,.table-wrap td{padding:9px;border-bottom:1px solid #edf1ef;text-align:left;white-space:nowrap}.table-wrap th{font-size:11px;background:#f8faf9}.flash{padding:10px 12px;border-radius:9px;margin-bottom:12px;font-size:13px}.flash.success{background:#eaf7ef;color:#12603b}.flash.error{background:#fdecec;color:#9c1f25}.notice{padding:10px;border-radius:8px;background:#eef6f1;color:#175c42}.empty{text-align:center;color:var(--muted);padding:20px}.toolbar{display:flex;flex-wrap:wrap;align-items:end;gap:8px}.pos-grid{display:grid;grid-template-columns:1.45fr .9fr;gap:14px}.cart-line,.pay-line{display:grid;gap:7px;align-items:end;margin:8px 0}.cart-line{grid-template-columns:1fr 90px 120px}.pay-line{grid-template-columns:100px 110px 1fr}.total-box{display:flex;justify-content:space-between;align-items:end;border-top:1px solid var(--line);margin-top:12px;padding-top:12px}.total-box strong{font-size:25px}.barchart{display:flex;align-items:end;gap:7px;height:190px}.bar-item{flex:1;height:100%;display:flex;flex-direction:column;justify-content:end;align-items:center}.bar{width:75%;max-width:30px;background:linear-gradient(180deg,var(--gold),var(--green));border-radius:5px 5px 0 0;min-height:2px}.bar-item span{font-size:9px;color:var(--muted);margin-top:5px}.login-page{min-height:100vh;display:grid;place-items:center;background:radial-gradient(circle at top right,#4a7b6b,#11382d 45%,#071b15)}.login-card{width:min(760px,92vw);background:#fff;border-radius:23px;padding:28px;box-shadow:0 22px 70px rgba(0,0,0,.28);text-align:left}.logo-wrap{display:flex;justify-content:center;align-items:center;gap:14px}.login-logo{width:65px;height:65px}.brand-big{font-size:27px;font-weight:900;letter-spacing:.3px}.subbrand{font-size:10px;color:#a2782c;font-weight:900;letter-spacing:2.2px}.bottles{display:flex;justify-content:center;gap:18px;align-items:end;margin:18px 0}.bottle{display:block;width:62px;border-radius:12px 12px 16px 16px;position:relative;box-shadow:0 14px 18px rgba(0,0,0,.12)}.bottle:before{content:'';position:absolute;width:22px;height:26px;left:20px;top:-23px;background:#cfae68;border-radius:4px}.bottle.wine{height:128px;background:linear-gradient(90deg,#cfd9c6,#eef4ea)}.bottle.red{height:115px;background:linear-gradient(90deg,#87332f,#541915)}.bottle.dark{height:105px;background:linear-gradient(90deg,#1d4a40,#0b231e)}.login-card h1{margin:3px 0}.login-card form{max-width:430px;margin:18px auto}.login-card input{margin:6px 0 11px}.login-note{max-width:600px;margin:13px auto 0;padding:11px;background:#fff8e2;border-radius:9px;font-size:11px;color:#6c5722}.quick-report-links{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}.quick-report-wrap{margin-top:12px}.quick-report-wrap>b{display:block;font-size:12px;margin-bottom:4px}.report-tools{display:flex;flex-wrap:wrap;gap:8px;align-items:end}.metric{padding:13px;border:1px solid var(--line);border-radius:11px}.metric .v{font-size:18px;font-weight:800;margin-top:5px}@media(max-width:1200px){.kpis{grid-template-columns:repeat(3,1fr)}.two{grid-template-columns:1fr}.form-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:800px){.sidebar{transform:translateX(-100%);transition:.2s;width:275px}.open-nav .sidebar{transform:translateX(0)}.mobile-head{display:flex;position:sticky;top:0;z-index:30;background:var(--green);color:#fff;justify-content:space-between;align-items:center;padding:10px 13px}.brand-mini{display:flex;align-items:center;gap:8px;font-weight:800}.brand-mini img{width:33px}.menu{background:transparent;color:#fff;border:0;font-size:23px}main{margin-left:0;padding:12px}.topbar{display:block}.clock{display:inline-block;margin-top:8px}.kpis{grid-template-columns:repeat(2,1fr)}.three,.four,.form-grid{grid-template-columns:1fr}.pos-grid{grid-template-columns:1fr}.cart-line,.pay-line{grid-template-columns:1fr 90px 110px}.login-card{padding:22px}.login-logo{width:54px;height:54px}.brand-big{font-size:23px}}
-@media print{.sidebar,.mobile-head,.topbar,.btn,.actions,.toolbar{display:none!important}main{margin:0;padding:0}.card{box-shadow:none;border:0}.report-print{display:block}}
+@media print{@page{size:landscape;margin:12mm}html,body{background:#fff!important;color:#111!important;font-size:10pt!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}.sidebar,.mobile-head,.topbar,.btn,.actions,.toolbar,.inline-actions,.movement-controls,form{display:none!important}main{margin:0!important;padding:0!important;width:100%!important;min-height:0!important}.card{box-shadow:none!important;border:0!important;border-radius:0!important;padding:0!important;margin:0 0 10mm!important;break-inside:avoid}.report-print{display:block!important;width:100%!important}.table-wrap{overflow:visible!important}.table-wrap table{width:100%!important;border-collapse:collapse!important;font-size:8pt!important}.table-wrap th,.table-wrap td{white-space:normal!important;padding:5px!important;border:1px solid #b9c5be!important}.table-wrap th{background:#e8eee9!important;color:#132a20!important}.metric,.notice{break-inside:avoid}.report-print h2{font-size:16pt!important}a{color:#111!important;text-decoration:none!important}}
 .inline-actions{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:2px 0}.inline-actions input,.inline-actions select{padding:7px;font-size:11px;width:auto}.inline-actions .btn{padding:7px 9px;font-size:11px}.notice{padding:10px;border-radius:8px;background:#eef6f1;color:#175c42;font-size:12px;margin-bottom:10px}
 /* Live M-Pesa feed */
 .mpesa-live-card{min-height:170px}.mpesa-live-head{display:flex;justify-content:space-between;align-items:center;gap:10px}.mpesa-live-feed{display:flex;flex-direction:column;gap:7px;margin-top:10px;max-height:250px;overflow:auto}.mpesa-live-item{display:grid;grid-template-columns:auto 1fr auto;gap:9px;align-items:center;padding:9px 10px;border:1px solid var(--line);border-radius:10px;background:#fbfdfc}.mpesa-live-dot{width:8px;height:8px;border-radius:50%;background:#1a6a49;box-shadow:0 0 0 4px #e7f4ee}.mpesa-live-main{min-width:0}.mpesa-live-main b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mpesa-live-main span{font-size:11px;color:var(--muted)}.mpesa-live-amt{font-weight:800;white-space:nowrap}.mpesa-live-empty{padding:18px;text-align:center;color:var(--muted);border:1px dashed var(--line);border-radius:10px}.pulse{animation:pulseMontez 1.4s ease-in-out infinite}@keyframes pulseMontez{0%,100%{opacity:1}50%{opacity:.45}}
@@ -1705,8 +1798,22 @@ def export_pl_v2(handler,u,qs):
     require_perm_user(u,'VIEW_LEDGER'); require_perm_user(u,'PRINT_EXPORT')
     start=_qsval(qs,'start'); end=_qsval(qs,'end'); fmt=_qsval(qs,'format','xlsx').lower()
     if not start or not end: raise ValueError('Report period is missing.')
-    bid=branch_scope_for(u,qs); d=core.pl_summary(start,end,bid); rows=[['Sales Revenue',d['revenue']],['Cost of Goods Sold',d['cogs']],['Gross Profit',d['gross_profit']],['Operating Expenses',d['expenses']],['Net Profit',d['net_profit']],['COGS Reliable Cost Coverage (%)',round(d['cogs_coverage_pct'],2)],['Sale Lines Missing Cost',d['cogs_missing_lines']],['Sale Lines Using Estimated Cost',d['cogs_estimated_lines']]]
-    headers=['Profit & Loss Item','Amount / Count']; st=core.get_settings(); out,ctype,fn=_export_rows(f"{st.get('business_name',APP_NAME)} · {st.get('business_branch_name','')} · PROFIT AND LOSS",headers,rows,fmt); return send_file(handler,out,ctype,fn)
+    bid=branch_scope_for(u,qs); d=core.pl_summary(start,end,bid)
+    revenue=float(d['revenue'] or 0); cogs=float(d['cogs'] or 0); gross=float(d['gross_profit'] or 0); expenses=float(d['expenses'] or 0); net=float(d['net_profit'] or 0)
+    pct=lambda value: round((100.0*value/revenue),2) if revenue else 0.0
+    rows=[
+        ['Sales Revenue',revenue,100.0,'Total recorded sales in the selected period'],
+        ['Less: Cost of Goods Sold (COGS)',cogs,pct(cogs),'Quantity sold × sale-time unit cost'],
+        ['Gross Profit',gross,pct(gross),'Sales Revenue − COGS'],
+        ['Less: Operating Expenses',expenses,pct(expenses),'Expenses recorded in the selected period'],
+        ['NET PROFIT / (LOSS)',net,pct(net),'Gross Profit − Operating Expenses'],
+        ['COGS Recorded-Cost Coverage',float(d['cogs_coverage_pct']),None,'Percentage of sale lines with reliable recorded sale-time cost'],
+        ['Sale Lines Missing Cost',int(d['cogs_missing_lines']),None,'These lines can make reported profit incomplete'],
+        ['Sale Lines Using Estimated Cost',int(d['cogs_estimated_lines']),None,'Estimated current average cost; review before relying on profit'],
+        ['Sale Lines Reviewed',int(d['cogs_lines']),None,'Total sale lines included in COGS coverage review']
+    ]
+    headers=['Profit & Loss Statement','Amount (KES)','% of Sales Revenue','Calculation / Management Note']
+    st=core.get_settings(); out,ctype,fn=_export_rows(f"{st.get('business_name',APP_NAME)} · {st.get('business_branch_name','')} · PROFIT AND LOSS",headers,rows,fmt); return send_file(handler,out,ctype,fn)
 
 def mpesa_test_connection(u):
     if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
