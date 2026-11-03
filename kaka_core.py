@@ -122,7 +122,7 @@ class DB:
         if 'home_branch_id' not in user_cols:
             c.execute('ALTER TABLE users ADD COLUMN home_branch_id INTEGER REFERENCES branches(id)')
         # Freeze the first assigned outlet for every existing branch-bound account.
-        c.execute('UPDATE users SET home_branch_id=branch_id WHERE home_branch_id IS NULL AND branch_id IS NOT NULL')
+        c.execute("UPDATE users SET home_branch_id=branch_id WHERE home_branch_id IS NULL AND branch_id IS NOT NULL AND access_role='SALES'")
         sales_cols={r['name'] for r in c.execute('PRAGMA table_info(sales)').fetchall()}
         if 'branch_id' not in sales_cols:
             c.execute('ALTER TABLE sales ADD COLUMN branch_id INTEGER REFERENCES branches(id)')
