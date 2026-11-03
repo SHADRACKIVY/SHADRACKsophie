@@ -91,5 +91,32 @@ jobs:
           except PermissionError:
               pass
           admin_edit_user(admin,{"user_id":str(sales_id),"full_name":"Sales","role":"SALES","active":"1","branch_id":str(bid)})
-          print("PASS: Settings persistence, validation, permission profiles, management navigation, role changes and permanent Sales branch assignment.")
+          # A backup download must be a readable, integrity-checked SQLite snapshot.
+          import io, sqlite3
+          fake=object.__new__(app.Handler)
+          fake.send_response=lambda status: None
+          fake.send_header=lambda name,value: None
+          fake.end_headers=lambda: None
+          fake.wfile=io.BytesIO()
+          app.Handler.download_backup(fake,admin)
+          backup_bytes=fake.wfile.getvalue()
+          assert backup_bytes.startswith(b"SQLite format 3\\x00")
+          backup_files=[os.path.join(os.environ["KAKA_DATA_DIR"],"backups",f) for f in os.listdir(os.path.join(os.environ["KAKA_DATA_DIR"],"backups")) if f.endswith(".db")]
+          assert backup_files
+          snap=sqlite3.connect(backup_files[-1])
+          assert snap.execute("PRAGMA integrity_check").fetchone()[0]=="ok"
+          assert snap.execute("SELECT COUNT(*) FROM users").fetchone()[0]>=2
+          snap.close()
+          # M-Pesa callbacks must not mark mismatched amount/phone as paid.
+          c=core.db.c()
+          c.execute("INSERT INTO mpesa_stk_requests(created_at,user_id,checkout_request_id,client_ref,amount,phone,status,raw_response,updated_at,branch_id) VALUES(?,?,?,?,?,?,?,?,?,?)",(core.now_str(),admin_id,"ci-review-checkout","CI-REVIEW-1",100,"254712345678","PENDING","{}",core.now_str(),bid))
+          c.execute("INSERT INTO mpesa_stk_requests(created_at,user_id,checkout_request_id,client_ref,amount,phone,status,raw_response,updated_at,branch_id) VALUES(?,?,?,?,?,?,?,?,?,?)",(core.now_str(),admin_id,"ci-success-checkout","CI-SUCCESS-1",100,"254712345678","PENDING","{}",core.now_str(),bid))
+          c.commit(); c.close()
+          def stk_callback(checkout,amount,code,phone="254712345678"):
+              return {"Body":{"stkCallback":{"CheckoutRequestID":checkout,"MerchantRequestID":"ci-merchant","ResultCode":0,"ResultDesc":"The service request is processed successfully.","CallbackMetadata":{"Item":[{"Name":"Amount","Value":amount},{"Name":"MpesaReceiptNumber","Value":code},{"Name":"PhoneNumber","Value":phone},{"Name":"TransactionDate","Value":20261103101530}]}}}}
+          app.mpesa_receive_stk(stk_callback("ci-review-checkout",150,"CIAMT001"))
+          c=core.db.c(); assert c.execute("SELECT status FROM mpesa_stk_requests WHERE checkout_request_id='ci-review-checkout'").fetchone()["status"]=="REVIEW"; c.close()
+          app.mpesa_receive_stk(stk_callback("ci-success-checkout",100,"CISUCC001"))
+          c=core.db.c(); assert c.execute("SELECT status FROM mpesa_stk_requests WHERE checkout_request_id='ci-success-checkout'").fetchone()["status"]=="SUCCESS"; c.close()
+          print("PASS: Settings, permissions, consistent backup download, mobile navigation, and M-Pesa callback reconciliation.")
           PY
