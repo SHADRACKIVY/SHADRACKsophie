@@ -1057,7 +1057,7 @@ def sales_page(u, message='', search_query='', search_results=None, selected_cus
         try: scid=int(selected_customer_id)
         except Exception: scid=0
         if scid:
-            c=core.db.c(); sc=c.execute('SELECT id,full_name,phone,id_no,address FROM customers WHERE id=? AND active=1',(scid,)).fetchone(); c.close()
+            c=core.db.c(); sc=c.execute('SELECT id,full_name,phone,id_no,address FROM customers WHERE id=? AND active=1'+(' AND branch_id=?' if role_name(u) not in ('ADMIN','MANAGEMENT') else ''),(scid,int(u.get('branch_id') or 0)) if role_name(u) not in ('ADMIN','MANAGEMENT') else (scid,)).fetchone(); c.close()
             if sc:
                 selected_customer_id_val=str(sc['id']); selected_customer_html=f'<div class="selected-customer"><b>SAVED CUSTOMER</b><div>{esc(sc["full_name"])} · {esc(sc["phone"])}</div><div class="muted">ID: {esc(sc["id_no"] or "—")} · {esc(sc["address"] or "")}</div></div>'
     notice=f'<div class="flash error">{esc(message)}</div>' if message else ''
@@ -1715,6 +1715,7 @@ def mpesa_confirm_direct_payment(u, form):
     if sale_type not in ('RETAIL','WHOLESALE'): raise ValueError('Invalid sale type.')
     if not phone_raw: raise ValueError('Enter the customer M-Pesa phone number.')
     if pid<=0 or qty<=0: raise ValueError('Select a product and enter a valid quantity.')
+    cart=[{'product_id':pid,'qty':qty}]
     phone=mpesa.normalize_phone(phone_raw); c=core.db.c()
     try:
         p=c.execute('SELECT p.*,COALESCE(bs.qty,0) branch_qty,COALESCE(bs.sell_price,p.sell_price) branch_sell_price,COALESCE(bs.wholesale_price,p.wholesale_price) branch_wholesale_price FROM products p LEFT JOIN branch_stock bs ON bs.product_id=p.id AND bs.branch_id=? WHERE p.id=? AND p.active=1',(branch_id,pid)).fetchone()
@@ -2526,12 +2527,12 @@ class Handler(BaseHTTPRequestHandler):
                     c.rollback(); raise
                 finally: c.close()
                 add_flash(session_token(self),f'Customer {name} saved successfully. Continue the credit sale.','success')
-                return redirect(self,'/sales?customer_id='+str(cid))
+                return redirect(self,'/sales?customer_id='+str(cid)+'&branch_id='+str(branch_id))
             if customer_action=='SAVE_EXISTING_CUSTOMER':
                 cid=int(form.get('customer_id','0') or 0)
                 if not cid: raise ValueError('Search and select an existing customer before saving.')
-                c=core.db.c(); found=c.execute('SELECT id,full_name FROM customers WHERE id=? AND active=1',(cid,)).fetchone(); c.close()
-                if not found: raise ValueError('Selected customer was not found.')
+                c=core.db.c(); found=c.execute('SELECT id,full_name FROM customers WHERE id=? AND active=1'+(' AND branch_id=?' if role_name(u) not in ('ADMIN','MANAGEMENT') else ''),(cid,int(u.get('branch_id') or 0)) if role_name(u) not in ('ADMIN','MANAGEMENT') else (cid,)).fetchone(); c.close()
+                if not found: raise ValueError('Selected customer was not found in your branch.')
                 add_flash(session_token(self),f'Existing customer {found["full_name"]} saved for this sale.','success')
                 return redirect(self,'/sales?customer_id='+str(cid))
             customer_mode=form.get('customer_mode','WALK_IN').upper(); sale_type=form.get('sale_type','RETAIL').upper()
