@@ -317,6 +317,7 @@ def layout(u, title, content, active='', subtitle='Business control center'):
         nav=[(label,href) for label,href in nav if perm_map.get(href) and allowed(u,perm_map[href])]
         if role=='MANAGEMENT':
             if allowed(u,'VIEW_REPORTS'): nav.append(('Branch Performance','/branch-performance'))
+    nav.append(('Cash → Paybill Requests','/cash-paybill-transfer'))
     nav_html=''.join(page_link(label,href,active) for label,href in nav)
     home_href='/' if dashboard_enabled and allowed(u,'VIEW_DASHBOARD') else '/sales'
     role_label={'ADMIN':setting_label('role_admin_label','ADMINISTRATOR / DEVELOPER'),'MANAGEMENT':setting_label('role_management_label','MANAGEMENT'),'SALES':setting_label('role_sales_label','SALES PERSON')}.get(role,role)
@@ -2331,6 +2332,68 @@ def financial_statement_data(account, start, end, branch_id=None, conn=None):
     return {'rows':rows,'opening':opening,'closing':balance,'money_in':round(total_in,2),'money_out':round(total_out,2)}
 
 
+def ensure_cash_paybill_schema():
+    c=core.db.c()
+    try:
+        c.execute("""CREATE TABLE IF NOT EXISTS cash_paybill_requests(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, request_no TEXT NOT NULL UNIQUE,
+            branch_id INTEGER NOT NULL REFERENCES branches(id), amount REAL NOT NULL CHECK(amount>0),
+            deposit_reference TEXT NOT NULL DEFAULT '', note TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','APPROVED','REJECTED')),
+            requested_by INTEGER NOT NULL REFERENCES users(id), requested_at TEXT NOT NULL,
+            reviewed_by INTEGER REFERENCES users(id), reviewed_at TEXT, review_note TEXT NOT NULL DEFAULT '',
+            transfer_no TEXT UNIQUE, posted_at TEXT)""")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_cash_paybill_req_branch_status ON cash_paybill_requests(branch_id,status,requested_at)")
+        c.commit()
+    finally:
+        c.close()
+
+
+def cash_paybill_transfer_page(u, message=''):
+    ensure_cash_paybill_schema()
+    role=role_name(u)
+    c=core.db.c()
+    try:
+        branches=[dict(x) for x in c.execute("SELECT id,name FROM branches WHERE active=1 ORDER BY name").fetchall()]
+        if role in ('ADMIN','MANAGEMENT'):
+            rows=[dict(x) for x in c.execute("""SELECT r.*,b.name branch_name,ru.full_name requester,au.full_name approver
+                FROM cash_paybill_requests r JOIN branches b ON b.id=r.branch_id
+                JOIN users ru ON ru.id=r.requested_by LEFT JOIN users au ON au.id=r.reviewed_by
+                ORDER BY CASE r.status WHEN 'PENDING' THEN 0 ELSE 1 END,r.id DESC LIMIT 300""").fetchall()]
+        else:
+            bid=int(u.get('branch_id') or 0)
+            if not bid: raise PermissionError('Your account has no assigned branch. Contact Administrator.')
+            rows=[dict(x) for x in c.execute("""SELECT r.*,b.name branch_name,ru.full_name requester,au.full_name approver
+                FROM cash_paybill_requests r JOIN branches b ON b.id=r.branch_id
+                JOIN users ru ON ru.id=r.requested_by LEFT JOIN users au ON au.id=r.reviewed_by
+                WHERE r.branch_id=? ORDER BY r.id DESC LIMIT 200""",(bid,)).fetchall()]
+    finally:
+        c.close()
+    notice=f'<div class="flash error">{esc(message)}</div>' if message else ''
+    if role in ('ADMIN','MANAGEMENT'):
+        branch_field='<div><label>Branch *</label><select name="branch_id" required><option value="">SELECT BRANCH</option>'+''.join(f'<option value="{int(b["id"])}">{esc(b["name"])}</option>' for b in branches)+'</select></div>'
+    else:
+        bid=int(u.get('branch_id') or 0)
+        bname=next((b['name'] for b in branches if int(b['id'])==bid),'Unassigned')
+        branch_field=f'<input type="hidden" name="branch_id" value="{bid}"><div><label>Your assigned branch</label><input value="{esc(bname)}" readonly></div>'
+    form=f'''<section class="card"><div class="section-head"><h2>Request Cash → Paybill Transfer</h2><span class="pill">PENDING APPROVAL</span></div>
+    <p class="muted">Submitting a request does not change balances. Management or Administrator must approve before the system posts the transfer.</p>
+    <form method="post" action="/cash-paybill-transfer" class="form-grid">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="request">
+    {branch_field}<div><label>Amount (KSh) *</label><input type="number" name="amount" min="0.01" step="0.01" required></div>
+    <div><label>Paybill deposit reference / M-Pesa code (optional)</label><input name="deposit_reference" maxlength="100"></div>
+    <div style="grid-column:1/-1"><label>Reason *</label><input name="note" minlength="5" maxlength="250" required></div>
+    <div class="actions"><button class="btn gold">SUBMIT REQUEST</button></div></form></section>'''
+    items=[]
+    for r in rows:
+        action=''
+        if role in ('ADMIN','MANAGEMENT') and r['status']=='PENDING':
+            action=f'''<form method="post" action="/cash-paybill-transfer">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="request_id" value="{r["id"]}"><input name="review_note" placeholder="Review / rejection reason"><button class="btn gold" name="action" value="approve" onclick="return confirm('Approve and post this transfer?')">APPROVE & POST</button><button class="btn danger" name="action" value="reject">REJECT</button></form>'''
+        items.append([esc(r['request_no']),esc(r['requested_at']),esc(r['branch_name']),money(r['amount']),esc(r['requester']),esc(r['deposit_reference'] or '—'),esc(r['note']),esc(r['status']),esc(r['approver'] or '—'),esc(r['reviewed_at'] or '—'),action or esc(r['review_note'] or '—')])
+    table=html_table(['Request','Date','Branch','Amount','Requested By','Deposit Ref.','Reason','Status','Reviewed By','Reviewed At','Action / Note'],items,'No transfer requests yet.')
+    note='<div class="notice">Only Management or Administrator can approve or reject. Approval rechecks branch cash and posts equal Cash OUT and Paybill IN entries once only. Transfers are not income or expenses.</div>'
+    return layout(u,'Cash → Paybill Requests',notice+form+note+f'<section class="card" style="margin-top:14px"><h2>Transfer Requests</h2>{table}</section>','/cash-paybill-transfer','Request and approve branch cash deposits to Paybill')
+
+
 def financials_page(u, query=None, message=''):
     if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
     query=query or {}
@@ -2366,15 +2429,7 @@ def financials_page(u, query=None, message=''):
     <div class="metric-grid"><div class="metric"><div class="muted">OPENING BALANCE</div><div class="v">{money(data["opening"])}</div></div><div class="metric"><div class="muted">TOTAL MONEY IN</div><div class="v">{money(data["money_in"])}</div></div><div class="metric"><div class="muted">TOTAL MONEY OUT</div><div class="v">{money(data["money_out"])}</div></div><div class="metric"><div class="muted">CLOSING BALANCE</div><div class="v">{money(data["closing"])}</div></div></div>
     <div class="actions" style="margin:12px 0"><button class="btn" type="button" onclick="window.print()">PRINT STATEMENT</button><a class="btn" href="{export.format(fmt="pdf")}">DOWNLOAD PDF</a><a class="btn" href="{export.format(fmt="xlsx")}">DOWNLOAD EXCEL</a></div>
     {html_table(["Date & Time","Transaction Code / Reference","Description","Branch","Money In","Money Out","Running Balance"],rows,"No financial transactions found for this period.")}</section>'''
-    transfer_form=f'''<section class="card" style="margin-top:14px"><div class="section-head"><h2>Transfer Cash to Paybill</h2><span class="pill">ADMINISTRATOR ONLY</span></div>
-    <p class="muted">This is an internal transfer: cash decreases and Paybill increases by the same amount. It is not sales income or an expense.</p>
-    <form method="post" action="/financials" class="form-grid">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="transfer">
-    <div><label>Source branch cash</label><select name="branch_id" required><option value="">SELECT BRANCH</option>{''.join(f'<option value="{int(b["id"])}">{esc(b["name"])}</option>' for b in branches)}</select></div>
-    <div><label>Amount deposited (KSh)</label><input type="number" name="amount" min="0.01" step="0.01" required></div>
-    <div><label>M-Pesa deposit transaction code</label><input name="mpesa_code" maxlength="40" required placeholder="e.g. QAB1234567"></div>
-    <div><label>Deposit slip / bank reference (optional)</label><input name="deposit_reference" maxlength="100"></div>
-    <div style="grid-column:1/-1"><label>Note / description</label><input name="note" maxlength="250" required placeholder="Cash deposited to business Paybill"></div>
-    <div class="actions"><button class="btn gold" type="submit">CONFIRM CASH → PAYBILL TRANSFER</button></div></form></section>'''
+    transfer_form=f'''<section class="card" style="margin-top:14px"><h2>Cash → Paybill Approval Workflow</h2><p>All users submit requests on the Cash → Paybill Requests page. Management or Administrator approves before posting.</p><a class="btn gold" href="/cash-paybill-transfer">OPEN TRANSFER REQUESTS</a></section>'''
     opening_form=f'''<section class="card" style="margin-top:14px"><div class="section-head"><h2>Set Initial Financial Balances</h2><span class="pill">ONE-TIME SETUP</span></div>
     <p class="muted">Enter verified balances already held when the system's financial tracking starts. Each account/branch can be initialized only once; the entry is retained in the audit trail.</p>
     <form method="post" action="/financials" class="form-grid">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="opening">
@@ -2420,6 +2475,7 @@ def financials_post(handler,u,form):
         c.execute('BEGIN IMMEDIATE')
         ts=now()
         if action=='transfer':
+            raise PermissionError('Direct transfers are disabled. Submit a request for Management or Administrator approval.')
             branch_id=int(form.get('branch_id','0') or 0)
             amount=round(float(form.get('amount','0') or 0),2)
             code=str(form.get('mpesa_code','')).strip().upper()
@@ -2660,6 +2716,7 @@ class Handler(BaseHTTPRequestHandler):
             if billing.get('suspended') and role_name(u)!='ADMIN': return send_html(self,subscription_block_page(billing),402)
             if path=='/api/mpesa/stk-status': return send_json(self,mpesa_stk_status(_qsval(qs,'checkout_request_id'),u,qs))
             if path=='/api/mpesa/live-messages': return send_json(self,mpesa_live_messages_json(u,qs))
+            if path=='/cash-paybill-transfer': return send_html(self,cash_paybill_transfer_page(u))
             if path=='/financials':
                 if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
                 return send_html(self,financials_page(u,qs))
