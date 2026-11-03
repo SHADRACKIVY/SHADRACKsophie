@@ -3,7 +3,7 @@
 Zero-third-party-dependency web application.
 Uses Python standard library + SQLite; core business logic is reused from the tested core.
 """
-import os, io, json, time, secrets, socket, datetime as dt, html, re, zipfile, mimetypes
+import os, io, json, time, secrets, socket, datetime as dt, html, re, zipfile, mimetypes, traceback
 from email import policy
 from email.parser import BytesParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -2004,6 +2004,8 @@ class Handler(BaseHTTPRequestHandler):
             if str(e)=='Please sign in.': return redirect(self,'/login')
             return send_html(self,error_page(str(e),403),403)
         except Exception as e:
+            print(f'[MONTEZ ERROR] GET {path}: {type(e).__name__}: {e}', flush=True)
+            traceback.print_exc()
             return send_html(self,error_page(str(e),500),500)
 
     def do_POST(self):
@@ -2465,6 +2467,8 @@ def do_POST(self):
         if path=='/customers/credit-payment': return send_json(self,{'error':str(e)},403)
         return send_html(self,error_page(str(e),403),403)
     except Exception as e:
+        print(f'[MONTEZ ERROR] POST {path}: {type(e).__name__}: {e}', flush=True)
+        traceback.print_exc()
         if path=='/customers/credit-payment': return send_json(self,{'error':str(e) or 'Unable to update credit invoice.'},500)
         return send_html(self,error_page(str(e),500),500)
 Handler.do_POST=do_POST
