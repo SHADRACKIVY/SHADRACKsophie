@@ -230,7 +230,7 @@ class DB:
             ('AI_ASSISTANT','KAKA LIQUOR WINES AND SPIRIT AI Assistant','Ask business questions and get explanations from system data.')
         ]
         sales_defaults={'VIEW_DASHBOARD','CREATE_SALE','CREATE_PURCHASE','RECORD_EXPENSE','MANAGE_CUSTOMERS','VIEW_REPORTS','VIEW_STOCK','LIVE_MONITORING','PRINT_EXPORT','CREDIT_SALES','CREDIT_REPAYMENTS','MANAGE_PRODUCTS','AI_ASSISTANT'}
-        management_defaults={'VIEW_DASHBOARD','VIEW_REPORTS','VIEW_STOCK','VIEW_LEDGER','PRINT_EXPORT','AI_ASSISTANT'}
+        management_defaults={'VIEW_DASHBOARD','VIEW_REPORTS','VIEW_STOCK','VIEW_LEDGER','PRINT_EXPORT','AI_ASSISTANT','MANAGE_PRODUCTS'}
         for key,label,desc in permission_defs:
             c.execute('INSERT OR IGNORE INTO permissions(key,label,description) VALUES(?,?,?)',(key,label,desc))
             c.execute('INSERT OR IGNORE INTO role_permissions(role,key,enabled) VALUES(?,?,?)',('ADMIN',key,1))
@@ -254,6 +254,7 @@ class DB:
             'live_refresh_seconds':'5',
             'default_reorder_level':'5',
             'default_unit':'bottle',
+            'expense_categories':'Rent,Utilities,Wages,Transport,Licensing,Repairs,Security,Marketing,Bank Charges,Other',
             'default_payment_transactions':'1',
             'receipt_prefix':'MONTEZ',
             'allow_credit_sales':'YES',
@@ -278,6 +279,10 @@ class DB:
             'ai_base_url':'https://api.openai.com/v1/responses',
             'ai_api_key':'',
             'mpesa_recovery_match_window_minutes':'1440',
+            'subscription_first_month':'2026-12',
+            'subscription_due_day':'5',
+            'subscription_paybill':'516600',
+            'subscription_account':'319851',
             'business_logo_filename':'',
             'role_admin_label':'ADMINISTRATOR / DEVELOPER',
             'role_management_label':'MANAGEMENT',
@@ -308,6 +313,9 @@ class DB:
         if not c.execute("SELECT 1 FROM settings WHERE key='sales_product_registration_v1'").fetchone():
             c.execute("UPDATE role_permissions SET enabled=1 WHERE role='SALES' AND key='MANAGE_PRODUCTS'")
             c.execute("INSERT INTO settings(key,value,updated_at,updated_by) VALUES('sales_product_registration_v1','1',?,NULL)",(t,))
+        if not c.execute("SELECT 1 FROM settings WHERE key='management_product_registration_v1'").fetchone():
+            c.execute("UPDATE role_permissions SET enabled=1 WHERE role='MANAGEMENT' AND key='MANAGE_PRODUCTS'")
+            c.execute("INSERT INTO settings(key,value,updated_at,updated_by) VALUES('management_product_registration_v1','1',?,NULL)",(t,))
         c.commit(); c.close()
         c=self.c()
         try:
@@ -337,7 +345,7 @@ def update_settings(u, values):
     change_reason=str(values.get('change_reason','')).strip()
     if len(change_reason)<5:
         raise ValueError('A reason of at least 5 characters is required for every Administrator Settings change.')
-    allowed={'business_name','business_subtitle','business_phone','business_address','business_website','business_tax_pin','business_branch_name','receipt_footer','report_footer','dashboard_enabled','currency','idle_timeout_seconds','idle_timeout_minutes','live_refresh_seconds','default_reorder_level','default_unit','default_payment_transactions','receipt_prefix','allow_credit_sales','require_mpesa_code','max_payment_transactions','report_default_days','mpesa_recovery_match_window_minutes','business_logo_filename','mpesa_enabled','mpesa_environment','mpesa_shortcode','mpesa_shortcode_type','mpesa_consumer_key','mpesa_consumer_secret','mpesa_passkey','mpesa_callback_base_url','mpesa_account_reference_prefix','mpesa_transaction_desc','role_admin_label','role_management_label','role_sales_label','nav_dashboard','nav_sales','nav_sales_dashboard','nav_purchases','nav_expenses','nav_customers','nav_reports','nav_stock_report','nav_reorder_report','nav_live','nav_products','nav_users','nav_settings','nav_ledger','nav_profit_loss','nav_expense_report','nav_backup','nav_audit','report_end_day','report_end_week','report_today','report_this_week','report_monthly','report_this_month','report_last_month','report_this_year','report_last_year','performance_green_threshold_pct','performance_basis','ai_assistant_enabled','ai_provider','ai_model','ai_base_url','ai_api_key','subscription_monthly_amount'}
+    allowed={'business_name','business_subtitle','business_phone','business_address','business_website','business_tax_pin','business_branch_name','receipt_footer','report_footer','dashboard_enabled','currency','idle_timeout_seconds','idle_timeout_minutes','live_refresh_seconds','default_reorder_level','default_unit','expense_categories','default_payment_transactions','receipt_prefix','allow_credit_sales','require_mpesa_code','max_payment_transactions','report_default_days','mpesa_recovery_match_window_minutes','business_logo_filename','mpesa_enabled','mpesa_environment','mpesa_shortcode','mpesa_shortcode_type','mpesa_consumer_key','mpesa_consumer_secret','mpesa_passkey','mpesa_callback_base_url','mpesa_account_reference_prefix','mpesa_transaction_desc','role_admin_label','role_management_label','role_sales_label','nav_dashboard','nav_sales','nav_sales_dashboard','nav_purchases','nav_expenses','nav_customers','nav_reports','nav_stock_report','nav_reorder_report','nav_live','nav_products','nav_users','nav_settings','nav_ledger','nav_profit_loss','nav_expense_report','nav_backup','nav_audit','report_end_day','report_end_week','report_today','report_this_week','report_monthly','report_this_month','report_last_month','report_this_year','report_last_year','performance_green_threshold_pct','performance_basis','subscription_first_month','subscription_due_day','subscription_paybill','subscription_account','ai_assistant_enabled','ai_provider','ai_model','ai_base_url','ai_api_key','subscription_monthly_amount'}
     c=db.c(); t=now_str()
     try:
         c.execute('BEGIN')
@@ -348,7 +356,7 @@ def update_settings(u, values):
             oldrow=c.execute('SELECT value FROM settings WHERE key=?',(k,)).fetchone()
             oldvalue=oldrow['value'] if oldrow else ''
             if oldvalue != vv: changed_keys.append(k)
-            if k in ('idle_timeout_seconds','idle_timeout_minutes','live_refresh_seconds','default_reorder_level','default_payment_transactions','max_payment_transactions','report_default_days','performance_green_threshold_pct','mpesa_recovery_match_window_minutes'):
+            if k in ('idle_timeout_seconds','idle_timeout_minutes','live_refresh_seconds','default_reorder_level','default_payment_transactions','max_payment_transactions','report_default_days','performance_green_threshold_pct','mpesa_recovery_match_window_minutes','subscription_due_day'):
                 n=int(float(vv))
                 if k=='idle_timeout_seconds' and not 30<=n<=7200: raise ValueError('Idle timeout must be between 30 and 7200 seconds.')
                 if k=='idle_timeout_minutes' and not 1<=n<=120: raise ValueError('Idle logout must be between 1 and 120 minutes.')
@@ -358,11 +366,19 @@ def update_settings(u, values):
                 if k=='report_default_days' and not 1<=n<=365: raise ValueError('Report default days must be between 1 and 365.')
                 if k=='performance_green_threshold_pct' and not 1<=n<=100: raise ValueError('Performance threshold must be between 1 and 100 percent.')
                 if k=='mpesa_recovery_match_window_minutes' and not 5<=n<=10080: raise ValueError('M-Pesa recovery match window must be between 5 and 10080 minutes.')
+                if k=='subscription_due_day' and not 1<=n<=28: raise ValueError('Subscription due day must be between 1 and 28.')
                 vv=str(n)
                 if k=='idle_timeout_minutes':
                     c.execute('INSERT INTO settings(key,value,updated_at,updated_by) VALUES(?,?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at,updated_by=excluded.updated_by',('idle_timeout_seconds',str(n*60),t,u['id']))
                 elif k=='idle_timeout_seconds':
                     c.execute('INSERT INTO settings(key,value,updated_at,updated_by) VALUES(?,?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at,updated_by=excluded.updated_by',('idle_timeout_minutes',str(max(1,round(n/60))),t,u['id']))
+            if k=='expense_categories':
+                categories=[x.strip() for x in vv.split(',') if x.strip()]
+                if not categories or len(categories)>30 or any(len(x)>40 for x in categories): raise ValueError('Enter between 1 and 30 expense categories; each category must be 40 characters or fewer.')
+                if len({x.casefold() for x in categories})!=len(categories): raise ValueError('Expense categories must not contain duplicates.')
+                vv=','.join(categories)
+            if k=='subscription_first_month' and not re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])',vv): raise ValueError('First subscription month must use YYYY-MM format.')
+            if k in ('subscription_paybill','subscription_account') and not vv: raise ValueError(f'{k} cannot be blank.')
             if k=='subscription_monthly_amount':
                 try: amount=float(vv)
                 except (TypeError,ValueError): raise ValueError('Enter a valid monthly subscription amount in KSh.')
@@ -461,7 +477,7 @@ def _permission_enabled(value):
     return str(value or '').strip().lower() in ('1','true','yes','on','enabled')
 
 ADMIN_ONLY_PERMISSION_KEYS={'MANAGE_USERS','MANAGE_SETTINGS','BACKUP_DATA','VIEW_AUDIT'}
-MANAGEMENT_UNSUPPORTED_PERMISSION_KEYS={'MANAGE_PRODUCTS'}
+MANAGEMENT_UNSUPPORTED_PERMISSION_KEYS=set()
 
 def update_permissions(admin,data):
     if role_name(admin)!='ADMIN': raise PermissionError('Administrator permission required.')
@@ -473,7 +489,7 @@ def update_permissions(admin,data):
             for row in c.execute('SELECT key FROM permissions').fetchall():
                 key=row['key']
                 enabled=_permission_enabled(mapping.get(key,False))
-                if key in ADMIN_ONLY_PERMISSION_KEYS or (role=='MANAGEMENT' and key in MANAGEMENT_UNSUPPORTED_PERMISSION_KEYS):
+                if key in ADMIN_ONLY_PERMISSION_KEYS:
                     enabled=False
                 c.execute('INSERT INTO role_permissions(role,key,enabled) VALUES(?,?,?) ON CONFLICT(role,key) DO UPDATE SET enabled=excluded.enabled',(role,key,1 if enabled else 0))
         for uid,mapping in ((data.get('users') or {}) or {}).items():
@@ -483,7 +499,7 @@ def update_permissions(admin,data):
             if not user or user['access_role']=='ADMIN': continue
             for key,val in (mapping or {}).items():
                 if not c.execute('SELECT 1 FROM permissions WHERE key=?',(key,)).fetchone(): continue
-                if key in ADMIN_ONLY_PERMISSION_KEYS or (user['access_role']=='MANAGEMENT' and key in MANAGEMENT_UNSUPPORTED_PERMISSION_KEYS):
+                if key in ADMIN_ONLY_PERMISSION_KEYS:
                     enabled=False
                 else:
                     enabled=_permission_enabled(val)
@@ -512,10 +528,11 @@ def validate_payments(c, payments, total):
         if amt<=0: raise ValueError('Payment amount must be greater than zero.')
         if method not in ('CASH','MPESA'): raise ValueError('Payment method must be Cash or M-Pesa.')
         if method=='MPESA':
-            if not code: raise ValueError('M-Pesa transaction code is required for every M-Pesa payment.')
-            if code in seen: raise ValueError(f'M-Pesa code {code} is duplicated in this sale.')
-            if c.execute('SELECT 1 FROM sale_payments WHERE UPPER(mpesa_code)=?',(code,)).fetchone() or c.execute('SELECT 1 FROM credit_payments WHERE UPPER(mpesa_code)=?',(code,)).fetchone(): raise ValueError(f'M-Pesa code {code} has already been used.')
-            seen.add(code)
+            if not code and get_setting('require_mpesa_code','YES')=='YES': raise ValueError('M-Pesa transaction code is required for every M-Pesa payment.')
+            if code:
+                if code in seen: raise ValueError(f'M-Pesa code {code} is duplicated in this sale.')
+                if c.execute('SELECT 1 FROM sale_payments WHERE UPPER(mpesa_code)=?',(code,)).fetchone() or c.execute('SELECT 1 FROM credit_payments WHERE UPPER(mpesa_code)=?',(code,)).fetchone(): raise ValueError(f'M-Pesa code {code} has already been used.')
+                seen.add(code)
         else: code=''
         paid += amt
     if paid.quantize(Decimal('0.01')) != Decimal(str(total)).quantize(Decimal('0.01')): raise ValueError(f'Payments must equal sale total. Entered {money(paid)} of {money(total)}.')
@@ -523,6 +540,7 @@ def validate_payments(c, payments, total):
 
 def create_sale(u, data):
     cart=data.get('cart') or []; payments=data.get('payments') or []; customer=data.get('customer') or {}; credit=data.get('credit') or None; sale_type=str(data.get('sale_type','RETAIL') or 'RETAIL').upper()
+    if credit and get_setting('allow_credit_sales','YES')!='YES': raise ValueError('Credit sales are disabled by Administrator.')
     if sale_type not in ('RETAIL','WHOLESALE'): raise ValueError('Sale type must be Retail or Wholesale.')
     if not cart: raise ValueError('Cart is empty.')
     c=db.c()
@@ -696,14 +714,14 @@ def stock_report(start,end,branch_id=None):
         # Calculate opening and closing from this branch's movement ledger; historical shared stock is never reused.
         movement_filter=' AND branch_id=?' if branch_id is not None else ''
         movement_args=(p['id'],start,int(branch_id)) if branch_id is not None else (p['id'],start)
-        opening_net=c.execute("SELECT COALESCE(SUM(CASE WHEN movement_type='SALE' THEN -qty ELSE qty END),0) q FROM stock_movements WHERE product_id=? AND (movement_time<? OR movement_type='OPENING_STOCK')"+movement_filter,movement_args).fetchone()['q']
+        opening_net=c.execute("SELECT COALESCE(SUM(CASE WHEN movement_type='SALE' THEN -qty ELSE qty END),0) q FROM stock_movements WHERE product_id=? AND movement_time<?"+movement_filter,movement_args).fetchone()['q']
         adj_clause=' AND branch_id=?' if branch_id is not None else ''
         adj_args=(p['id'],start,end,int(branch_id)) if branch_id is not None else (p['id'],start,end)
-        adjustments=c.execute("SELECT COALESCE(SUM(CASE WHEN movement_type IN ('SALE','PURCHASE','OPENING_STOCK') THEN 0 ELSE qty END),0) q FROM stock_movements WHERE product_id=? AND movement_time BETWEEN ? AND ?"+adj_clause,adj_args).fetchone()['q']
+        adjustments=c.execute("SELECT COALESCE(SUM(CASE WHEN movement_type IN ('SALE','PURCHASE') THEN 0 ELSE qty END),0) q FROM stock_movements WHERE product_id=? AND movement_time BETWEEN ? AND ?"+adj_clause,adj_args).fetchone()['q']
         opening=float(opening_net or 0); closing=opening+float(pur or 0)-float(sold or 0)+float(adjustments or 0)
         current_qty=float(p['branch_stock_qty'] or 0)
         unit_cost=float(p['branch_cost'] or 0)
-        out.append({'sku':p['sku'],'name':p['name'],'category':p['category'],'stock':current_qty,'opening':opening,'purchased':pur,'sold':sold,'adjustments':float(adjustments or 0),'closing':closing,'sell_price':p['branch_sell_price'],'retail_price':p['branch_sell_price'],'wholesale_price':p['branch_wholesale_price'],'avg_cost':unit_cost,'stock_value':current_qty*unit_cost,'retail_units':float(split['retail_units'] or 0),'wholesale_units':float(split['wholesale_units'] or 0),'retail_revenue':float(split['retail_revenue'] or 0),'wholesale_revenue':float(split['wholesale_revenue'] or 0),'reorder_level':p['branch_reorder_level'],'status':'OUT OF STOCK' if current_qty<=0 else ('LOW STOCK' if current_qty<=p['branch_reorder_level'] else 'OK')})
+        out.append({'sku':p['sku'],'name':p['name'],'category':p['category'],'stock':current_qty,'opening':opening,'purchased':pur,'sold':sold,'adjustments':float(adjustments or 0),'closing':closing,'sell_price':p['branch_sell_price'],'retail_price':p['branch_sell_price'],'wholesale_price':p['branch_wholesale_price'],'avg_cost':unit_cost,'stock_value':current_qty*unit_cost,'retail_units':float(split['retail_units'] or 0),'wholesale_units':float(split['wholesale_units'] or 0),'retail_revenue':float(split['retail_revenue'] or 0),'wholesale_revenue':float(split['wholesale_revenue'] or 0),'reorder_level':p['branch_reorder_level'],'status':'OUT OF STOCK' if closing<=0 else ('LOW STOCK' if closing<=p['branch_reorder_level'] else 'OK')})
     for r in out:
         unit_total=r['retail_units']+r['wholesale_units']; rev_total=r['retail_revenue']+r['wholesale_revenue']
         r['retail_units_pct']=100*r['retail_units']/unit_total if unit_total else 0
@@ -767,23 +785,109 @@ def monthly_ranges(reference=None):
     return base.strftime('%Y-%m')
 
 def xlsx_bytes(title, headers, rows):
+    """Build a formatted, filterable, numeric Excel workbook using the Python standard library."""
     st=get_settings()
-    identity=[st.get('business_name',APP_NAME), st.get('business_branch_name',''), st.get('business_phone',''), st.get('business_address',''), st.get('business_website',''), ('KRA PIN: '+st.get('business_tax_pin','')) if st.get('business_tax_pin','') else '', title]
-    identity=[x for x in identity if str(x).strip()]
-    def cell(v):
-        s=esc(v); return f'<c t="inlineStr"><is><t>{s}</t></is></c>'
-    xml_rows=[f'<row>'+cell(v)+'</row>' for v in identity]
-    xml_rows.append('<row>'+''.join(cell(h) for h in headers)+'</row>')
-    for r in rows: xml_rows.append('<row>'+''.join(cell(v) for v in r)+'</row>')
-    if st.get('report_footer','').strip(): xml_rows.append('<row>'+cell(st['report_footer'].strip())+'</row>')
-    sheet='<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'+''.join(xml_rows)+'</sheetData></worksheet>'
-    wb='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Report" sheetId="1" r:id="rId1"/></sheets></workbook>'
-    ct='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>'
+    rows=[list(r) for r in rows]
+    headers=list(headers)
+    col_count=max(1,len(headers))
+    def xlcol(n):
+        out=''
+        while n:
+            n,rem=divmod(n-1,26); out=chr(65+rem)+out
+        return out
+    def xml(v):
+        return html.escape(str(v if v is not None else ''),quote=True)
+    def cell(ref,value,style=0):
+        if value is None or value=='':
+            return f'<c r="{ref}" s="{style}"/>'
+        if isinstance(value,bool):
+            return f'<c r="{ref}" s="{style}" t="b"><v>{1 if value else 0}</v></c>'
+        if isinstance(value,(int,float,Decimal)):
+            try:
+                n=float(value)
+                if not (n==n and abs(n)!=float('inf')): raise ValueError()
+                return f'<c r="{ref}" s="{style}"><v>{format(n,".12g")}</v></c>'
+            except Exception:
+                pass
+        return f'<c r="{ref}" s="{style}" t="inlineStr"><is><t xml:space="preserve">{xml(value)}</t></is></c>'
+    identity=[st.get('business_name',APP_NAME),st.get('business_branch_name',''),st.get('business_phone',''),st.get('business_address',''),st.get('business_website',''),('KRA PIN: '+st.get('business_tax_pin','')) if st.get('business_tax_pin','') else '',title]
+    identity=[v for v in identity if str(v).strip()]
+    all_rows=[]
+    for idx,value in enumerate(identity):
+        all_rows.append(([value],1 if idx==0 else 2,28 if idx==0 else 20))
+    header_row=len(all_rows)+1
+    all_rows.append((headers,3,30))
+    for row in rows:
+        label=str(row[0] if row else '').upper()
+        summary=any(k in label for k in ('NET PROFIT','GROSS PROFIT','TOTAL','CLOSING BALANCE','OPENING BALANCE'))
+        all_rows.append((row,7 if summary else 0,28 if summary else 28))
+    if st.get('report_footer','').strip():
+        all_rows.append(([st['report_footer'].strip()],2,24))
+    sheet_rows=[]
+    for rno,(values,row_style,height) in enumerate(all_rows,1):
+        cells=[]
+        for cno in range(1,col_count+1):
+            value=values[cno-1] if cno<=len(values) else ''
+            style=row_style
+            if row_style in (0,7) and isinstance(value,(int,float,Decimal)) and cno<=len(headers):
+                h=str(headers[cno-1]).lower()
+                if '%' in h or 'percentage' in h or 'share' in h: style=5
+                elif any(k in h for k in ('amount','revenue','price','cost','value','total','debit','credit','balance','profit','expense','sales')) and not any(k in h for k in ('count','units','qty','quantity','number','transactions')): style=4
+                else: style=6
+                if row_style==7 and not ('%' in h or 'percentage' in h or 'share' in h): style=7
+            cells.append(cell(f'{xlcol(cno)}{rno}',value,style))
+        sheet_rows.append(f'<row r="{rno}" ht="{height}" customHeight="1">{"".join(cells)}</row>')
+    last_row=max(1,len(all_rows)); last_col=xlcol(col_count)
+    widths=[]
+    for i in range(col_count):
+        samples=[str(headers[i] if i<len(headers) else '')]+[str(row[i]) for row in rows[:250] if i<len(row) and row[i] is not None]
+        width=max(11,min(34,max((len(x) for x in samples),default=12)+2))
+        if any(k in str(headers[i]).lower() for k in ('description','customer','product','supplier','branch','attended','reference','calculation','note')): width=max(width,22)
+        widths.append(f'<col min="{i+1}" max="{i+1}" width="{width}" customWidth="1"/>')
+    merges=''.join(f'<mergeCell ref="A{i}:{last_col}{i}"/>' for i in range(1,header_row) if col_count>1)
+    merge_xml=f'<mergeCells count="{header_row-1}">{merges}</mergeCells>' if merges else ''
+    auto_filter=f'<autoFilter ref="A{header_row}:{last_col}{last_row}"/>' if last_row>header_row else ''
+    sheet=f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <dimension ref="A1:{last_col}{last_row}"/>
+      <sheetViews><sheetView workbookViewId="0"><pane ySplit="{header_row}" topLeftCell="A{header_row+1}" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
+      <sheetFormatPr defaultRowHeight="20"/><cols>{"".join(widths)}</cols>
+      <sheetData>{"".join(sheet_rows)}</sheetData>{auto_filter}{merge_xml}
+      <pageMargins left="0.25" right="0.25" top="0.5" bottom="0.5" header="0.2" footer="0.2"/>
+      <pageSetup orientation="landscape" fitToWidth="1" fitToHeight="0" paperSize="9"/>
+      <headerFooter><oddFooter>&amp;L MONTEZ LIQUOR&amp;C Confidential&amp;RPage &amp;P of &amp;N</oddFooter></headerFooter>
+    </worksheet>'''
+    workbook='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Business Report" sheetId="1" r:id="rId1"/></sheets><calcPr calcMode="auto"/></workbook>'
+    content_types='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>'
     rels='<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'
-    wrels='<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>'
+    wrels='<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'
+    styles='''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <numFmts count="2"><numFmt numFmtId="164" formatCode='"KES" #,##0.00;[Red]("KES" #,##0.00)'/><numFmt numFmtId="165" formatCode='0.00"%"'/></numFmts>
+      <fonts count="4"><font><sz val="10"/><name val="Aptos"/></font><font><b/><sz val="16"/><color rgb="FFFFFFFF"/><name val="Aptos Display"/></font><font><sz val="9"/><color rgb="FF52645A"/><name val="Aptos"/></font><font><b/><sz val="10"/><color rgb="FFFFFFFF"/><name val="Aptos"/></font></fonts>
+      <fills count="5"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF164F40"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFEAF1EC"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFF2D6"/><bgColor indexed="64"/></patternFill></fill></fills>
+      <borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color rgb="FFDCE5DE"/></left><right style="thin"><color rgb="FFDCE5DE"/></right><top style="thin"><color rgb="FFDCE5DE"/></top><bottom style="thin"><color rgb="FFDCE5DE"/></bottom><diagonal/></border></borders>
+      <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+      <cellXfs count="8">
+        <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1"><alignment vertical="center" wrapText="1"/></xf>
+        <xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFill="1" applyFont="1"><alignment vertical="center"/></xf>
+        <xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"><alignment vertical="center"/></xf>
+        <xf numFmtId="0" fontId="3" fillId="2" borderId="1" xfId="0" applyFill="1" applyFont="1" applyBorder="1"><alignment vertical="center" wrapText="1"/></xf>
+        <xf numFmtId="164" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1"><alignment horizontal="right"/></xf>
+        <xf numFmtId="165" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1"><alignment horizontal="right"/></xf>
+        <xf numFmtId="4" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1"><alignment horizontal="right"/></xf>
+        <xf numFmtId="164" fontId="3" fillId="4" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1"><alignment horizontal="right" vertical="center" wrapText="1"/></xf>
+      </cellXfs>
+      <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+    </styleSheet>'''
     bio=io.BytesIO()
     with zipfile.ZipFile(bio,'w',zipfile.ZIP_DEFLATED) as z:
-        z.writestr('[Content_Types].xml',ct); z.writestr('_rels/.rels',rels); z.writestr('xl/workbook.xml',wb); z.writestr('xl/_rels/workbook.xml.rels',wrels); z.writestr('xl/worksheets/sheet1.xml',sheet)
+        z.writestr('[Content_Types].xml',content_types)
+        z.writestr('_rels/.rels',rels)
+        z.writestr('xl/workbook.xml',workbook)
+        z.writestr('xl/_rels/workbook.xml.rels',wrels)
+        z.writestr('xl/worksheets/sheet1.xml',sheet)
+        z.writestr('xl/styles.xml',styles)
     return bio.getvalue()
 
 def simple_pdf(title, headers, rows):

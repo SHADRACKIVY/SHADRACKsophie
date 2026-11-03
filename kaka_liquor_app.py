@@ -3,7 +3,7 @@
 Zero-third-party-dependency web application.
 Uses Python standard library + SQLite; core business logic is reused from the tested core.
 """
-import os, io, json, time, secrets, socket, datetime as dt, html, re, zipfile, mimetypes, traceback
+import os, io, json, time, secrets, socket, datetime as dt, html, re, zipfile, mimetypes, traceback, sqlite3
 from email import policy
 from email.parser import BytesParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -93,11 +93,14 @@ def period_from_query(q):
         year=today.year if preset=='THIS_YEAR' else today.year-1
         fd=f'{year}-01-01'; td=f'{year}-12-31'; ft='00:00'; tt='23:59'; preset='THIS YEAR' if preset=='THIS_YEAR' else 'LAST YEAR'
     else:
-        if not fd: fd=today.isoformat()
-        if not td: td=fd
-        preset='CUSTOM' if (_qsval(q,'from_date','') or _qsval(q,'to_date','')) else 'TODAY'
-        if preset=='TODAY' and not _qsval(q,'from_date','') and not _qsval(q,'to_date',''):
-            ft='00:00'; tt='23:59'
+        preset='CUSTOM' if (_qsval(q,'from_date','') or _qsval(q,'to_date','')) else 'DEFAULT PERIOD'
+        if not fd and not td:
+            days=max(1,min(365,int(float(core.get_setting('report_default_days','7')))))
+            fd=(today-dt.timedelta(days=days-1)).isoformat(); td=today.isoformat(); ft='00:00'; tt='23:59'
+            preset=f'LAST {days} DAYS' if days>1 else 'TODAY'
+        else:
+            if not fd: fd=today.isoformat()
+            if not td: td=fd
     try:
         dt.date.fromisoformat(fd); dt.date.fromisoformat(td)
         dt.datetime.strptime(ft, '%H:%M'); dt.datetime.strptime(tt, '%H:%M')
@@ -106,13 +109,16 @@ def period_from_query(q):
     return fd,ft,td,tt,preset
 
 def range_toolbar(action, fd, ft, td, tt, branch_id=None):
-    return ('<form method="get" action="%s" class="form-grid" style="align-items:end">'
-            '<input type="hidden" name="branch_id" value="%s">'
-            '<div><label>From Date</label><input type="date" name="from_date" value="%s"></div>'
-            '<div><label>From Time</label><input type="time" name="from_time" value="%s"></div>'
-            '<div><label>To Date</label><input type="date" name="to_date" value="%s"></div>'
-            '<div><label>To Time</label><input type="time" name="to_time" value="%s"></div>'
-            '<div><button class="btn gold" type="submit">APPLY</button></div></form>') % (esc(action),esc(branch_id or ''),esc(fd),esc(ft),esc(td),esc(tt))
+    form=('<form method="get" action="%s" class="form-grid" style="align-items:end">'
+          '<input type="hidden" name="branch_id" value="%s">'
+          '<div><label>From Date</label><input type="date" name="from_date" value="%s"></div>'
+          '<div><label>From Time</label><input type="time" name="from_time" value="%s"></div>'
+          '<div><label>To Date</label><input type="date" name="to_date" value="%s"></div>'
+          '<div><label>To Time</label><input type="time" name="to_time" value="%s"></div>'
+          '<div><button class="btn gold" type="submit">APPLY</button></div></form>') % (esc(action),esc(branch_id or ''),esc(fd),esc(ft),esc(td),esc(tt))
+    presets=[('END_DAY','report_end_day','END DAY REPORT'),('END_WEEK','report_end_week','END WEEK REPORT'),('TODAY','report_today','TODAY'),('THIS_WEEK','report_this_week','THIS WEEK REPORT'),('MONTHLY','report_monthly','MONTHLY REPORT'),('THIS_MONTH','report_this_month','THIS MONTH'),('LAST_MONTH','report_last_month','LAST MONTH'),('THIS_YEAR','report_this_year','THIS YEAR'),('LAST_YEAR','report_last_year','LAST YEAR')]
+    links=''.join(f'<a class="btn" href="{esc(action)}?preset={key}&branch_id={esc(branch_id or "")}">{esc(setting_label(setting,default))}</a>' for key,setting,default in presets)
+    return form+f'<div class="actions report-presets" style="margin-top:10px;flex-wrap:wrap">{links}</div>'
 
 def setting_label(key, fallback=''):
     return core.get_setting(key, fallback) or fallback
@@ -311,12 +317,38 @@ def layout(u, title, content, active='', subtitle='Business control center'):
         nav=[(label,href) for label,href in nav if perm_map.get(href) and allowed(u,perm_map[href])]
         if role=='MANAGEMENT':
             if allowed(u,'VIEW_REPORTS'): nav.append(('Branch Performance','/branch-performance'))
+    nav.append(('Cash → Paybill Requests','/cash-paybill-transfer'))
     nav_html=''.join(page_link(label,href,active) for label,href in nav)
     home_href='/' if dashboard_enabled and allowed(u,'VIEW_DASHBOARD') else '/sales'
     role_label={'ADMIN':setting_label('role_admin_label','ADMINISTRATOR / DEVELOPER'),'MANAGEMENT':setting_label('role_management_label','MANAGEMENT'),'SALES':setting_label('role_sales_label','SALES PERSON')}.get(role,role)
     idle_ms=int(float(settings.get('idle_timeout_minutes','2'))*60*1000)
     refresh_s=max(2,int(float(settings.get('live_refresh_seconds','5'))))
-    return f'''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#123c31"><link rel="manifest" href="/manifest.json"><link rel="icon" href="/business-logo"><title>{esc(title)} · {esc(name)}</title><style>{CSS}</style></head><body><header class="mobile-head"><div class="brand-mini"><img src="/business-logo"> <span>{esc(name)}</span></div><button class="menu" type="button" onclick="document.body.classList.toggle('open-nav')">☰</button></header><aside class="sidebar"><div class="brand"><img src="/business-logo"><span><b>{esc(name)}</b><small>{esc(branch or business_subtitle)}</small></span></div><nav>{nav_html}</nav><div class="side-bottom"><div class="userbox"><b>{esc(u.get('full_name',''))}</b><span>@{esc(u.get('username',''))}</span><span>{esc(role_label)}</span></div><a class="nav" href="/change-password">Change Password</a><a class="nav logout" href="/logout">LOG OUT</a></div></aside><main><header class="topbar"><div><h1>{esc(title)}</h1><p class="muted">{esc(name)} · {esc(business_subtitle)} · {esc(subtitle)}</p></div><div class="clock" id="clock"></div></header><div class="actions movement-controls" style="padding:10px 0;position:sticky;top:0;z-index:20;background:var(--page,#f5f6f4)"><a class="btn" href="{home_href}">⌂ HOME</a><button class="btn" type="button" onclick="if(history.length>1){{history.back()}}else{{location.href='{home_href}'}}">← BACK</button><a class="btn" href="{home_href}" onclick="return confirm('Cancel this screen and return to the home screen? Unsaved form changes will be lost.')">✕ CANCEL</a></div>{flash_html(handler=None)}{content}<footer class="app-powered">Powered by SHADYTECHSOLUTIONS</footer></main>{SCANNER_MODAL}<script>{SCANNER_JS}</script><script>(function(){{function tick(){{var e=document.getElementById('clock');if(e)e.textContent=new Date().toLocaleString('en-KE',{{dateStyle:'medium',timeStyle:'medium'}})}}tick();setInterval(tick,1000);var mpesaPollSeconds={refresh_s},currencySymbol={json.dumps(settings.get('currency','KSh'))};function paintMpesaLive(payload){{var box=document.getElementById('mpesa-live-messages');if(!box||!payload)return;var items=payload.messages||[];if(!items.length){{box.innerHTML='<div class="mpesa-live-empty">Waiting for M-Pesa payment messages…</div>';return;}}box.innerHTML=items.map(function(i){{var safeTitle=String(i.title||'M-PESA PAYMENT').replace(/[&<>\"]/g,function(c){{return {{'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}}[c]}});return '<div class="mpesa-live-item"><span class="mpesa-live-dot '+(i.source==='C2B'?'pulse':'')+'"></span><div class="mpesa-live-main"><b>'+safeTitle+'</b><span>'+String(i.ts||'')+' · '+String(i.detail||'')+'</span></div><span class="mpesa-live-amt">KSh '+Number(i.amount||0).toLocaleString('en-KE',{{minimumFractionDigits:2,maximumFractionDigits:2}})+'</span></div>'}}).join('')}};function pollMpesaLive(){{var box=document.getElementById('mpesa-live-messages');if(!box)return;fetch('/api/mpesa/live-messages'+(location.search||''),{{cache:'no-store',credentials:'same-origin'}}).then(function(r){{if(r.status===401){{location.href='/login';return null;}}return r.ok?r.json():null;}}).then(paintMpesaLive).catch(function(){{}})}};if(document.getElementById('mpesa-live-messages')){{pollMpesaLive();setInterval(pollMpesaLive,Math.max(2,mpesaPollSeconds)*1000);}}var idleMs={idle_ms},lastActivity=Date.now();function touch(){{lastActivity=Date.now()}};['click','keydown','touchstart','input','change','scroll'].forEach(function(ev){{document.addEventListener(ev,touch,{{passive:true}})}});setInterval(function(){{if(Date.now()-lastActivity>=idleMs){{location.href='/logout?auto=1'}}}},1000);}})();</script></body></html>'''
+    # Outstanding credit invoices automatically surface once their contractual due date arrives.
+    credit_alert_html=''
+    try:
+        cc=core.db.c()
+        alert_sql="""SELECT ca.id,ca.principal,ca.paid_amount,MAX(ca.principal-ca.paid_amount,0) AS balance,ca.due_date,c.full_name,s.receipt_no,b.name AS branch_name
+                     FROM credit_accounts ca JOIN customers c ON c.id=ca.customer_id
+                     JOIN sales s ON s.id=ca.sale_id LEFT JOIN branches b ON b.id=s.branch_id
+                     WHERE ca.status='OPEN' AND MAX(ca.principal-ca.paid_amount,0)>0.005
+                       AND date(ca.due_date)<=date('now','localtime')"""
+        alert_args=[]
+        if role not in ('ADMIN','MANAGEMENT'):
+            alert_sql+=" AND s.branch_id=?"; alert_args.append(int(u.get('branch_id') or 0))
+        alert_sql+=" ORDER BY date(ca.due_date),ca.id LIMIT 8"
+        mature=cc.execute(alert_sql,alert_args).fetchall(); cc.close()
+        if mature:
+            overdue_count=len(mature)
+            alert_items=[]
+            for item in mature:
+                due_label='DUE TODAY' if str(item['due_date'])==dt.date.today().isoformat() else 'OVERDUE'
+                alert_items.append(f'<li><b>{esc(item["full_name"])}</b> · Invoice {esc(item["receipt_no"])} · Due {esc(item["due_date"])} · Balance {money(item["balance"])} · <b>{due_label}</b></li>')
+            more=' (showing first 8)' if overdue_count==8 else ''
+            credit_alert_html=f'<section class="card" role="alert" style="margin:12px 0;border:2px solid #b7791f;background:#fff8e8"><div class="section-head"><h2 style="color:#8a4b08">⚠ CREDIT INVOICE MATURITY ALERT</h2><span class="pill">{overdue_count}+ DUE / OVERDUE{more}</span></div><p>One or more credit invoices have reached their payment due date and still have an outstanding balance. Please follow up with the customers and record repayments.</p><ul style="line-height:1.9">{"".join(alert_items)}</ul><a class="btn gold" href="/customers">REVIEW CREDIT INVOICES & RECORD PAYMENT</a></section>'
+    except Exception:
+        try: cc.close()
+        except Exception: pass
+    return f'''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#123c31"><link rel="manifest" href="/manifest.json"><link rel="icon" href="/business-logo"><title>{esc(title)} · {esc(name)}</title><style>{CSS}</style></head><body><header class="mobile-head"><div class="brand-mini"><img src="/business-logo"> <span>{esc(name)}</span></div><button class="menu" type="button" onclick="document.body.classList.toggle('open-nav')">☰</button></header><aside class="sidebar"><div class="brand"><img src="/business-logo"><span><b>{esc(name)}</b><small>{esc(branch or business_subtitle)}</small></span></div><nav>{nav_html}</nav><div class="side-bottom"><div class="userbox"><b>{esc(u.get('full_name',''))}</b><span>@{esc(u.get('username',''))}</span><span>{esc(role_label)}</span></div><a class="nav" href="/change-password">Change Password</a><a class="nav logout" href="/logout">LOG OUT</a></div></aside><main><header class="topbar"><div><h1>{esc(title)}</h1><p class="muted">{esc(name)} · {esc(business_subtitle)} · {esc(subtitle)}</p></div><div class="clock" id="clock"></div></header><div class="actions movement-controls" aria-label="Page navigation"><a class="btn" href="{home_href}">⌂ HOME</a><button class="btn" type="button" onclick="if(history.length>1){{history.back()}}else{{location.href='{home_href}'}}">← BACK</button><a class="btn" href="{home_href}" onclick="return confirm('Cancel this screen and return to the home screen? Unsaved form changes will be lost.')">✕ CANCEL</a></div>{flash_html(handler=None)}{credit_alert_html}{content}<footer class="app-powered">Powered by SHADYTECHSOLUTIONS</footer></main>{SCANNER_MODAL}<script>{SCANNER_JS}</script><script>(function(){{function tick(){{var e=document.getElementById('clock');if(e)e.textContent=new Date().toLocaleString('en-KE',{{dateStyle:'medium',timeStyle:'medium'}})}}tick();setInterval(tick,1000);var mpesaPollSeconds={refresh_s},currencySymbol={json.dumps(settings.get('currency','KSh'))};function paintMpesaLive(payload){{var box=document.getElementById('mpesa-live-messages');if(!box||!payload)return;var items=payload.messages||[];if(!items.length){{box.innerHTML='<div class="mpesa-live-empty">Waiting for M-Pesa payment messages…</div>';return;}}box.innerHTML=items.map(function(i){{var safeTitle=String(i.title||'M-PESA PAYMENT').replace(/[&<>\"]/g,function(c){{return {{'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}}[c]}});return '<div class="mpesa-live-item"><span class="mpesa-live-dot '+(i.source==='C2B'?'pulse':'')+'"></span><div class="mpesa-live-main"><b>'+safeTitle+'</b><span>'+String(i.ts||'')+' · '+String(i.detail||'')+'</span></div><span class="mpesa-live-amt">'+currencySymbol+' '+Number(i.amount||0).toLocaleString('en-KE',{{minimumFractionDigits:2,maximumFractionDigits:2}})+'</span></div>'}}).join('')}};function pollMpesaLive(){{var box=document.getElementById('mpesa-live-messages');if(!box)return;fetch('/api/mpesa/live-messages'+(location.search||''),{{cache:'no-store',credentials:'same-origin'}}).then(function(r){{if(r.status===401){{location.href='/login';return null;}}return r.ok?r.json():null;}}).then(paintMpesaLive).catch(function(){{}})}};if(document.getElementById('mpesa-live-messages')){{pollMpesaLive();setInterval(pollMpesaLive,Math.max(2,mpesaPollSeconds)*1000);}}var idleMs={idle_ms},lastActivity=Date.now();function touch(){{lastActivity=Date.now()}};['click','keydown','touchstart','input','change','scroll'].forEach(function(ev){{document.addEventListener(ev,touch,{{passive:true}})}});setInterval(function(){{if(Date.now()-lastActivity>=idleMs){{location.href='/logout?auto=1'}}}},1000);}})();</script></body></html>'''
 
 FLASH = {}
 CURRENT_HANDLER = None
@@ -566,7 +598,7 @@ def admin_set_stock(u, form):
 
 
 def record_opening_stock(u, form):
-    if role_name(u) not in ('ADMIN','SALES') or not allowed(u,'MANAGE_PRODUCTS'):
+    if role_name(u) not in ('ADMIN','MANAGEMENT','SALES') or not allowed(u,'MANAGE_PRODUCTS'):
         raise PermissionError('Product Registration permission is required.')
     pid=int(form.get('product_id','0') or 0)
     qty=float(form.get('opening_qty','0') or 0)
@@ -828,25 +860,118 @@ def html_table(headers, rows, empty='No records.'):
 
 
 def make_pdf(title, headers, rows):
-    # Simple, standards-compliant one-page text PDF using only Python stdlib.
+    """Create a paginated, landscape, text-based business report PDF (never a screenshot)."""
     st=core.get_settings()
-    lines=[st.get('business_name',APP_NAME), st.get('business_branch_name',''), st.get('business_phone',''), st.get('business_address',''), st.get('business_website',''), ('KRA PIN: '+st.get('business_tax_pin','')) if st.get('business_tax_pin','') else '', title, now(), ' | '.join(map(str,headers))]
-    if st.get('report_footer','').strip(): lines.append(st['report_footer'].strip())
-    lines += [' | '.join(map(str,r)) for r in rows[:48]]
-    def pdf_escape(s): return str(s).replace('\\','\\\\').replace('(','\\(').replace(')','\\)').replace('\n',' ')
-    y=760; content=['BT /F1 8 Tf 36 760 Td']
-    for line in lines:
-        content.append(f'({pdf_escape(line)}) Tj 0 -12 Td')
-    content.append('ET'); stream='\n'.join(content).encode('latin-1','replace')
-    objs=[b'<< /Type /Catalog /Pages 2 0 R >>',b'<< /Type /Pages /Kids [3 0 R] /Count 1 >>',b'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',f'<< /Length {len(stream)} >>\nstream\n'.encode()+stream+b'\nendstream']
-    out=io.BytesIO(); out.write(b'%PDF-1.4\n'); offsets=[0]
-    for i,obj in enumerate(objs,1):
-        offsets.append(out.tell()); out.write(f'{i} 0 obj\n'.encode()); out.write(obj); out.write(b'\nendobj\n')
-    xref=out.tell(); out.write(f'xref\n0 {len(objs)+1}\n0000000000 65535 f \n'.encode())
+    rows=[list(r) for r in rows]
+    wide=len(headers)>9
+    page_w,page_h=(1191,842) if wide else (842,595)
+    margin=34
+    usable=page_w-2*margin
+    # Allocate more space to descriptive columns while retaining a readable minimum.
+    weights=[]
+    for i,h in enumerate(headers):
+        samples=[str(r[i] if i<len(r) else '') for r in rows[:120]]
+        weights.append(max(8,min(30,max([len(str(h))]+[min(len(x),30) for x in samples])*.72)))
+    minw=34 if wide else 48
+    widths=[max(minw,usable*w/sum(weights)) for w in weights]
+    scale=usable/sum(widths); widths=[w*scale for w in widths]
+    def clean(v):
+        s=str(v if v is not None else '')
+        s=s.replace('KES ','').replace('\u00a0',' ')
+        return s.encode('latin-1','replace').decode('latin-1')
+    def esc(v):
+        return clean(v).replace('\\','\\\\').replace('(','\\(').replace(')','\\)').replace('\r',' ').replace('\n',' ')
+    def wrap(value, width, size):
+        text=clean(value)
+        limit=max(4,int((width-8)/(size*.50)))
+        words=text.split()
+        out=[]; line=''
+        for word in words:
+            while len(word)>limit:
+                if line: out.append(line); line=''
+                out.append(word[:limit]); word=word[limit:]
+            candidate=(line+' '+word).strip()
+            if len(candidate)>limit and line:
+                out.append(line); line=word
+            else: line=candidate
+        if line or not out: out.append(line)
+        return out
+    pages=[]
+    body_rows=rows or [['No records found for the selected period.']]
+    chunks=[]; current=[]; estimated=0
+    for row in body_rows:
+        cells=[]
+        for i in range(len(headers)):
+            value=row[i] if i<len(row) else ''
+            cells.append(wrap(value,widths[i],6.4 if wide else 7.2))
+        row_h=max(18,max(len(c) for c in cells)*(8 if wide else 9)+7)
+        if current and estimated+row_h>page_h-155:
+            chunks.append(current); current=[]; estimated=0
+        current.append((cells,row_h)); estimated+=row_h
+    if current: chunks.append(current)
+    if not chunks: chunks=[[]]
+    for page_no,chunk in enumerate(chunks,1):
+        cmds=[]
+        def rect(x,y,w,h,fill=None,stroke=None):
+            if fill: cmds.append(f'{fill[0]} {fill[1]} {fill[2]} rg')
+            if stroke: cmds.append(f'{stroke[0]} {stroke[1]} {stroke[2]} RG 0.45 w')
+            op='B' if fill and stroke else ('f' if fill else 'S')
+            cmds.append(f'{x:.2f} {y:.2f} {w:.2f} {h:.2f} re {op}')
+        def txt(x,y,text,size=8,bold=False,rgb=(.12,.18,.15)):
+            cmds.append(f'{rgb[0]} {rgb[1]} {rgb[2]} rg BT /{"F2" if bold else "F1"} {size} Tf {x:.2f} {y:.2f} Td ({esc(text)}) Tj ET')
+        y=page_h-38
+        txt(margin,y,st.get('business_name',APP_NAME),16,True,(.05,.22,.16)); y-=19
+        identity='  |  '.join(x for x in [st.get('business_branch_name',''),st.get('business_phone',''),st.get('business_address',''),st.get('business_website','')] if x)
+        if identity: txt(margin,y,identity,7); y-=13
+        if st.get('business_tax_pin'): txt(margin,y,'KRA PIN: '+st.get('business_tax_pin',''),7); y-=13
+        txt(margin,y,clean(title),12,True,(.05,.22,.16)); y-=16
+        txt(margin,y,'Generated: '+now()+'    |    Page '+str(page_no)+' of '+str(len(chunks)),7); y-=20
+        x=margin; header_h=24
+        rect(margin,y-header_h,usable,header_h,(.05,.22,.16),(.05,.22,.16))
+        for i,h in enumerate(headers):
+            txt(x+4,y-15,wrap(h,widths[i]-4,7)[0],6.8,True,(1,1,1)); x+=widths[i]
+        y-=header_h
+        for ridx,(cells,row_h) in enumerate(chunk):
+            x=margin
+            rect(margin,y-row_h,usable,row_h,(.965,.975,.968) if ridx%2==0 else (1,1,1),(.83,.87,.84))
+            for i,lines in enumerate(cells):
+                for j,line in enumerate(lines):
+                    if j* (8 if wide else 9) >= row_h-4: break
+                    txt(x+4,y-11-j*(8 if wide else 9),line,6.4 if wide else 7.2,False)
+                x+=widths[i]
+            # Vertical rules keep columns distinct.
+            x=margin
+            for w in widths[:-1]:
+                x+=w; cmds.append(f'.86 .89 .87 RG .35 w {x:.2f} {y-row_h:.2f} m {x:.2f} {y:.2f} l S')
+            y-=row_h
+        footer=st.get('report_footer','').strip()
+        if footer: txt(margin,22,footer[:180],7)
+        txt(page_w-margin-130,22,'MONTEZ LIQUOR  |  CONFIDENTIAL',6,False,(.35,.4,.37))
+        stream='\n'.join(cmds).encode('latin-1','replace')
+        pages.append(stream)
+    # Assemble a valid multi-page PDF with reusable Helvetica fonts.
+    objects=[None,None]
+    page_ids=[]
+    for stream in pages:
+        page_id=len(objects)+1; content_id=page_id+1; page_ids.append(page_id)
+        objects.append(f'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {page_w} {page_h}] /Resources << /Font << /F1 {len(objects)+3} 0 R /F2 {len(objects)+4} 0 R >> >> /Contents {content_id} 0 R >>'.encode())
+        objects.append(f'<< /Length {len(stream)} >>\nstream\n'.encode()+stream+b'\nendstream')
+    font1=len(objects)+1; objects.append(b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>')
+    font2=len(objects)+1; objects.append(b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>')
+    objects[0]=b'<< /Type /Catalog /Pages 2 0 R >>'
+    kids=' '.join(f'{i} 0 R' for i in page_ids)
+    objects[1]=f'<< /Type /Pages /Kids [{kids}] /Count {len(page_ids)} >>'.encode()
+    # Correct page font references after object numbering is final.
+    for idx,pid in enumerate(page_ids):
+        content_id=pid+1
+        objects[pid-1]=f'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {page_w} {page_h}] /Resources << /Font << /F1 {font1} 0 R /F2 {font2} 0 R >> >> /Contents {content_id} 0 R >>'.encode()
+    out=io.BytesIO(); out.write(b'%PDF-1.4\n%MONTEZ-REPORT\n'); offsets=[0]
+    for n,obj in enumerate(objects,1):
+        offsets.append(out.tell()); out.write(f'{n} 0 obj\n'.encode()); out.write(obj); out.write(b'\nendobj\n')
+    xref=out.tell(); out.write(f'xref\n0 {len(objects)+1}\n0000000000 65535 f \n'.encode())
     for off in offsets[1:]: out.write(f'{off:010d} 00000 n \n'.encode())
-    out.write(f'trailer\n<< /Size {len(objs)+1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF'.encode())
+    out.write(f'trailer\n<< /Size {len(objects)+1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF'.encode())
     return out.getvalue()
-
 
 def report_rows(start, end): return core.report_data(start,end)
 
@@ -855,8 +980,8 @@ def build_xlsx(title, headers, rows): return core.xlsx_bytes(title,headers,rows)
 
 
 CSS = r'''
-:root{--bg:#f4f7f5;--card:#fff;--ink:#18241f;--muted:#68756f;--line:#dfe8e3;--green:#0d3b2f;--green2:#164f40;--gold:#d7ae5c;--red:#a92f33;--good:#1a6a49}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:Segoe UI,Arial,sans-serif}a{color:inherit;text-decoration:none}button,input,select{font:inherit}button{cursor:pointer}.sidebar{position:fixed;left:0;top:0;bottom:0;width:248px;background:linear-gradient(180deg,#0b3026,#123e31);color:#e9f2ee;padding:18px 14px;display:flex;flex-direction:column;z-index:20}.brand{display:flex;gap:10px;align-items:center;padding:5px 6px 18px}.brand img{width:46px;height:46px}.brand b{display:block;font-size:16px}.brand small{display:block;font-size:9px;letter-spacing:1.5px;color:#c8ddd5}.sidebar nav{display:flex;flex-direction:column;gap:4px;overflow:auto}.nav{padding:10px 12px;border-radius:9px;color:#dcebe5;font-size:13px}.nav:hover,.nav.active{background:#1b5444}.nav.logout{background:#7f292d;margin-top:4px}.side-bottom{margin-top:auto}.userbox{background:#174739;border:1px solid #2c6655;padding:11px;border-radius:10px;margin-bottom:7px;font-size:12px}.userbox b{font-size:13px}.userbox span{display:block;color:#bdd0c9;margin-top:2px}.mobile-head{display:none}main{margin-left:248px;padding:20px;min-height:100vh}.topbar{display:flex;justify-content:space-between;align-items:start;margin-bottom:18px}.topbar h1{margin:0 0 4px;font-size:27px}.clock{font-size:12px;background:#fff;border:1px solid var(--line);padding:9px 11px;border-radius:9px;font-weight:700}.muted{color:var(--muted);font-size:12px}.grid{display:grid;gap:14px}.two{grid-template-columns:repeat(2,1fr)}.three{grid-template-columns:repeat(3,1fr)}.four{grid-template-columns:repeat(4,1fr)}.card{background:var(--card);border:1px solid var(--line);border-radius:15px;padding:16px;box-shadow:0 5px 18px rgba(17,46,36,.05)}.kpis{grid-template-columns:repeat(6,1fr)}.kpi .label{font-size:11px;color:var(--muted)}.kpi strong{display:block;font-size:22px;margin-top:5px}.section-head,.report-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:11px}.section-head h2,.section-head h3{margin:0}.pill{font-size:10px;padding:5px 8px;border-radius:99px;background:#edf4f0;color:var(--green)}.btn{display:inline-block;border:1px solid #ccd8d2;background:#fff;color:var(--ink);border-radius:9px;padding:9px 12px;font-weight:700}.btn.primary{background:var(--green);color:#fff;border-color:var(--green)}.btn.gold{background:var(--gold);border-color:var(--gold);color:#221908}.btn.danger{background:var(--red);color:#fff;border-color:var(--red)}.full{width:100%}.form-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.field label,label{display:block;font-size:12px;font-weight:700;margin-bottom:5px}.field input,.field select,input,select{width:100%;padding:10px;border:1px solid #ccd8d2;border-radius:8px;background:#fff}.actions{display:flex;gap:8px;flex-wrap:wrap}.table-wrap{overflow:auto}.table-wrap table{width:100%;border-collapse:collapse;font-size:12px}.table-wrap th,.table-wrap td{padding:9px;border-bottom:1px solid #edf1ef;text-align:left;white-space:nowrap}.table-wrap th{font-size:11px;background:#f8faf9}.flash{padding:10px 12px;border-radius:9px;margin-bottom:12px;font-size:13px}.flash.success{background:#eaf7ef;color:#12603b}.flash.error{background:#fdecec;color:#9c1f25}.notice{padding:10px;border-radius:8px;background:#eef6f1;color:#175c42}.empty{text-align:center;color:var(--muted);padding:20px}.toolbar{display:flex;flex-wrap:wrap;align-items:end;gap:8px}.pos-grid{display:grid;grid-template-columns:1.45fr .9fr;gap:14px}.cart-line,.pay-line{display:grid;gap:7px;align-items:end;margin:8px 0}.cart-line{grid-template-columns:1fr 90px 120px}.pay-line{grid-template-columns:100px 110px 1fr}.total-box{display:flex;justify-content:space-between;align-items:end;border-top:1px solid var(--line);margin-top:12px;padding-top:12px}.total-box strong{font-size:25px}.barchart{display:flex;align-items:end;gap:7px;height:190px}.bar-item{flex:1;height:100%;display:flex;flex-direction:column;justify-content:end;align-items:center}.bar{width:75%;max-width:30px;background:linear-gradient(180deg,var(--gold),var(--green));border-radius:5px 5px 0 0;min-height:2px}.bar-item span{font-size:9px;color:var(--muted);margin-top:5px}.login-page{min-height:100vh;display:grid;place-items:center;background:radial-gradient(circle at top right,#4a7b6b,#11382d 45%,#071b15)}.login-card{width:min(760px,92vw);background:#fff;border-radius:23px;padding:28px;box-shadow:0 22px 70px rgba(0,0,0,.28);text-align:left}.logo-wrap{display:flex;justify-content:center;align-items:center;gap:14px}.login-logo{width:65px;height:65px}.brand-big{font-size:27px;font-weight:900;letter-spacing:.3px}.subbrand{font-size:10px;color:#a2782c;font-weight:900;letter-spacing:2.2px}.bottles{display:flex;justify-content:center;gap:18px;align-items:end;margin:18px 0}.bottle{display:block;width:62px;border-radius:12px 12px 16px 16px;position:relative;box-shadow:0 14px 18px rgba(0,0,0,.12)}.bottle:before{content:'';position:absolute;width:22px;height:26px;left:20px;top:-23px;background:#cfae68;border-radius:4px}.bottle.wine{height:128px;background:linear-gradient(90deg,#cfd9c6,#eef4ea)}.bottle.red{height:115px;background:linear-gradient(90deg,#87332f,#541915)}.bottle.dark{height:105px;background:linear-gradient(90deg,#1d4a40,#0b231e)}.login-card h1{margin:3px 0}.login-card form{max-width:430px;margin:18px auto}.login-card input{margin:6px 0 11px}.login-note{max-width:600px;margin:13px auto 0;padding:11px;background:#fff8e2;border-radius:9px;font-size:11px;color:#6c5722}.quick-report-links{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}.quick-report-wrap{margin-top:12px}.quick-report-wrap>b{display:block;font-size:12px;margin-bottom:4px}.report-tools{display:flex;flex-wrap:wrap;gap:8px;align-items:end}.metric{padding:13px;border:1px solid var(--line);border-radius:11px}.metric .v{font-size:18px;font-weight:800;margin-top:5px}@media(max-width:1200px){.kpis{grid-template-columns:repeat(3,1fr)}.two{grid-template-columns:1fr}.form-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:800px){.sidebar{transform:translateX(-100%);transition:.2s;width:275px}.open-nav .sidebar{transform:translateX(0)}.mobile-head{display:flex;position:sticky;top:0;z-index:30;background:var(--green);color:#fff;justify-content:space-between;align-items:center;padding:10px 13px}.brand-mini{display:flex;align-items:center;gap:8px;font-weight:800}.brand-mini img{width:33px}.menu{background:transparent;color:#fff;border:0;font-size:23px}main{margin-left:0;padding:12px}.topbar{display:block}.clock{display:inline-block;margin-top:8px}.kpis{grid-template-columns:repeat(2,1fr)}.three,.four,.form-grid{grid-template-columns:1fr}.pos-grid{grid-template-columns:1fr}.cart-line,.pay-line{grid-template-columns:1fr 90px 110px}.login-card{padding:22px}.login-logo{width:54px;height:54px}.brand-big{font-size:23px}}
-@media print{.sidebar,.mobile-head,.topbar,.btn,.actions,.toolbar{display:none!important}main{margin:0;padding:0}.card{box-shadow:none;border:0}.report-print{display:block}}
+:root{--bg:#f4f7f5;--card:#fff;--ink:#18241f;--muted:#68756f;--line:#dfe8e3;--green:#0d3b2f;--green2:#164f40;--gold:#d7ae5c;--red:#a92f33;--good:#1a6a49}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:Segoe UI,Arial,sans-serif}a{color:inherit;text-decoration:none}button,input,select{font:inherit}button{cursor:pointer}.sidebar{position:fixed;left:0;top:0;bottom:0;width:248px;background:linear-gradient(180deg,#0b3026,#123e31);color:#e9f2ee;padding:18px 14px;display:flex;flex-direction:column;z-index:20}.brand{display:flex;gap:10px;align-items:center;padding:5px 6px 18px}.brand img{width:46px;height:46px}.brand b{display:block;font-size:16px}.brand small{display:block;font-size:9px;letter-spacing:1.5px;color:#c8ddd5}.sidebar nav{display:flex;flex-direction:column;gap:4px;overflow:auto}.nav{padding:10px 12px;border-radius:9px;color:#dcebe5;font-size:13px}.nav:hover,.nav.active{background:#1b5444}.nav.logout{background:#7f292d;margin-top:4px}.side-bottom{margin-top:auto}.userbox{background:#174739;border:1px solid #2c6655;padding:11px;border-radius:10px;margin-bottom:7px;font-size:12px}.userbox b{font-size:13px}.userbox span{display:block;color:#bdd0c9;margin-top:2px}.mobile-head{display:none}main{margin-left:248px;padding:20px;min-height:100vh}.topbar{display:flex;justify-content:space-between;align-items:start;margin-bottom:18px}.topbar h1{margin:0 0 4px;font-size:27px}.clock{font-size:12px;background:#fff;border:1px solid var(--line);padding:9px 11px;border-radius:9px;font-weight:700}.muted{color:var(--muted);font-size:12px}.grid{display:grid;gap:14px}.two{grid-template-columns:repeat(2,1fr)}.three{grid-template-columns:repeat(3,1fr)}.four{grid-template-columns:repeat(4,1fr)}.card{background:var(--card);border:1px solid var(--line);border-radius:15px;padding:16px;box-shadow:0 5px 18px rgba(17,46,36,.05)}.kpis{grid-template-columns:repeat(6,1fr)}.kpi .label{font-size:11px;color:var(--muted)}.kpi strong{display:block;font-size:22px;margin-top:5px}.section-head,.report-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:11px}.section-head h2,.section-head h3{margin:0}.pill{font-size:10px;padding:5px 8px;border-radius:99px;background:#edf4f0;color:var(--green)}.btn{display:inline-block;border:1px solid #ccd8d2;background:#fff;color:var(--ink);border-radius:9px;padding:9px 12px;font-weight:700}.btn.primary{background:var(--green);color:#fff;border-color:var(--green)}.btn.gold{background:var(--gold);border-color:var(--gold);color:#221908}.btn.danger{background:var(--red);color:#fff;border-color:var(--red)}.movement-controls{position:static!important;z-index:auto!important;background:transparent!important;padding:0!important;margin:0 0 14px!important;display:flex;gap:8px;flex-wrap:wrap}.movement-controls .btn{min-height:40px}.full{width:100%}.form-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.field label,label{display:block;font-size:12px;font-weight:700;margin-bottom:5px}.field input,.field select,input,select{width:100%;padding:10px;border:1px solid #ccd8d2;border-radius:8px;background:#fff}.actions{display:flex;gap:8px;flex-wrap:wrap}.table-wrap{overflow:auto}.table-wrap table{width:100%;border-collapse:collapse;font-size:12px}.table-wrap th,.table-wrap td{padding:9px;border-bottom:1px solid #edf1ef;text-align:left;white-space:nowrap}.table-wrap th{font-size:11px;background:#f8faf9}.flash{padding:10px 12px;border-radius:9px;margin-bottom:12px;font-size:13px}.flash.success{background:#eaf7ef;color:#12603b}.flash.error{background:#fdecec;color:#9c1f25}.notice{padding:10px;border-radius:8px;background:#eef6f1;color:#175c42}.empty{text-align:center;color:var(--muted);padding:20px}.toolbar{display:flex;flex-wrap:wrap;align-items:end;gap:8px}.pos-grid{display:grid;grid-template-columns:1.45fr .9fr;gap:14px}.cart-line,.pay-line{display:grid;gap:7px;align-items:end;margin:8px 0}.cart-line{grid-template-columns:1fr 90px 120px}.pay-line{grid-template-columns:100px 110px 1fr}.total-box{display:flex;justify-content:space-between;align-items:end;border-top:1px solid var(--line);margin-top:12px;padding-top:12px}.total-box strong{font-size:25px}.barchart{display:flex;align-items:end;gap:7px;height:190px}.bar-item{flex:1;height:100%;display:flex;flex-direction:column;justify-content:end;align-items:center}.bar{width:75%;max-width:30px;background:linear-gradient(180deg,var(--gold),var(--green));border-radius:5px 5px 0 0;min-height:2px}.bar-item span{font-size:9px;color:var(--muted);margin-top:5px}.login-page{min-height:100vh;display:grid;place-items:center;background:radial-gradient(circle at top right,#4a7b6b,#11382d 45%,#071b15)}.login-card{width:min(760px,92vw);background:#fff;border-radius:23px;padding:28px;box-shadow:0 22px 70px rgba(0,0,0,.28);text-align:left}.logo-wrap{display:flex;justify-content:center;align-items:center;gap:14px}.login-logo{width:65px;height:65px}.brand-big{font-size:27px;font-weight:900;letter-spacing:.3px}.subbrand{font-size:10px;color:#a2782c;font-weight:900;letter-spacing:2.2px}.bottles{display:flex;justify-content:center;gap:18px;align-items:end;margin:18px 0}.bottle{display:block;width:62px;border-radius:12px 12px 16px 16px;position:relative;box-shadow:0 14px 18px rgba(0,0,0,.12)}.bottle:before{content:'';position:absolute;width:22px;height:26px;left:20px;top:-23px;background:#cfae68;border-radius:4px}.bottle.wine{height:128px;background:linear-gradient(90deg,#cfd9c6,#eef4ea)}.bottle.red{height:115px;background:linear-gradient(90deg,#87332f,#541915)}.bottle.dark{height:105px;background:linear-gradient(90deg,#1d4a40,#0b231e)}.login-card h1{margin:3px 0}.login-card form{max-width:430px;margin:18px auto}.login-card input{margin:6px 0 11px}.login-note{max-width:600px;margin:13px auto 0;padding:11px;background:#fff8e2;border-radius:9px;font-size:11px;color:#6c5722}.quick-report-links{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}.quick-report-wrap{margin-top:12px}.quick-report-wrap>b{display:block;font-size:12px;margin-bottom:4px}.report-tools{display:flex;flex-wrap:wrap;gap:8px;align-items:end}.metric{padding:13px;border:1px solid var(--line);border-radius:11px}.metric .v{font-size:18px;font-weight:800;margin-top:5px}@media(max-width:1200px){.kpis{grid-template-columns:repeat(3,1fr)}.two{grid-template-columns:1fr}.form-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:800px){.sidebar{transform:translateX(-100%);transition:.2s;width:275px}.open-nav .sidebar{transform:translateX(0)}.mobile-head{display:flex;position:sticky;top:0;z-index:30;background:var(--green);color:#fff;justify-content:space-between;align-items:center;padding:10px 13px}.brand-mini{display:flex;align-items:center;gap:8px;font-weight:800}.brand-mini img{width:33px}.menu{background:transparent;color:#fff;border:0;font-size:23px}main{margin-left:0;padding:12px}.topbar{display:block}.clock{display:inline-block;margin-top:8px}.kpis{grid-template-columns:repeat(2,1fr)}.three,.four,.form-grid{grid-template-columns:1fr}.pos-grid{grid-template-columns:1fr}.cart-line,.pay-line{grid-template-columns:1fr 90px 110px}.login-card{padding:22px}.login-logo{width:54px;height:54px}.brand-big{font-size:23px}}
+@media print{@page{size:landscape;margin:12mm}html,body{background:#fff!important;color:#111!important;font-size:10pt!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}.sidebar,.mobile-head,.topbar,.btn,.actions,.toolbar,.inline-actions,.movement-controls,form{display:none!important}main{margin:0!important;padding:0!important;width:100%!important;min-height:0!important}.card{box-shadow:none!important;border:0!important;border-radius:0!important;padding:0!important;margin:0 0 10mm!important;break-inside:avoid}.report-print{display:block!important;width:100%!important}.table-wrap{overflow:visible!important}.table-wrap table{width:100%!important;border-collapse:collapse!important;font-size:8pt!important}.table-wrap th,.table-wrap td{white-space:normal!important;padding:5px!important;border:1px solid #b9c5be!important}.table-wrap th{background:#e8eee9!important;color:#132a20!important}.metric,.notice{break-inside:avoid}.report-print h2{font-size:16pt!important}a{color:#111!important;text-decoration:none!important}}
 .inline-actions{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:2px 0}.inline-actions input,.inline-actions select{padding:7px;font-size:11px;width:auto}.inline-actions .btn{padding:7px 9px;font-size:11px}.notice{padding:10px;border-radius:8px;background:#eef6f1;color:#175c42;font-size:12px;margin-bottom:10px}
 /* Live M-Pesa feed */
 .mpesa-live-card{min-height:170px}.mpesa-live-head{display:flex;justify-content:space-between;align-items:center;gap:10px}.mpesa-live-feed{display:flex;flex-direction:column;gap:7px;margin-top:10px;max-height:250px;overflow:auto}.mpesa-live-item{display:grid;grid-template-columns:auto 1fr auto;gap:9px;align-items:center;padding:9px 10px;border:1px solid var(--line);border-radius:10px;background:#fbfdfc}.mpesa-live-dot{width:8px;height:8px;border-radius:50%;background:#1a6a49;box-shadow:0 0 0 4px #e7f4ee}.mpesa-live-main{min-width:0}.mpesa-live-main b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mpesa-live-main span{font-size:11px;color:var(--muted)}.mpesa-live-amt{font-weight:800;white-space:nowrap}.mpesa-live-empty{padding:18px;text-align:center;color:var(--muted);border:1px dashed var(--line);border-radius:10px}.pulse{animation:pulseMontez 1.4s ease-in-out infinite}@keyframes pulseMontez{0%,100%{opacity:1}50%{opacity:.45}}
@@ -1099,7 +1224,7 @@ __BRANCH_FIELD__
 <section class="card"><div class="section-head"><h2>New Sale</h2><span class="pill">ATTENDED BY: __FULL_NAME__</span></div>
 <div class="form-grid"><div><label>Sale Type</label><select name="sale_type" id="sale_type" onchange="showRegisteredPrice()"><option value="RETAIL">RETAIL</option><option value="WHOLESALE">WHOLESALE</option></select></div></div><div class="section-head" style="margin-top:12px"><h3>Products in this sale</h3><button type="button" class="btn gold" onclick="addSaleLine()">+ ADD LINE</button></div><div id="sale_lines"><div class="form-grid sale-line" style="border:1px solid var(--line);padding:10px;border-radius:10px;margin-bottom:8px"><div><label>Product</label><select name="product_id_1" id="sale_product_1" class="sale-product" required onchange="showRegisteredPrice()">__PRODUCT_OPTS__</select></div><div><label>Quantity</label><input type="number" name="qty_1" id="sale_qty_1" class="sale-qty" min="1" step="1" value="1" required oninput="showRegisteredPrice()"></div><div><label>Registered unit price</label><input id="registered_price_display_1" class="locked-price sale-price" readonly></div><div><label>Line total</label><input id="line_total_1" class="locked-price sale-line-total" readonly><button type="button" class="btn" onclick="removeSaleLine(this)">REMOVE LINE</button></div></div></div><input id="sales_sku_scan" placeholder="Scan/type SKU, then look up" style="margin-top:7px"><button type="button" class="btn" style="margin-top:7px" onclick="lookupProductBySku('sales_sku_scan')">LOOK UP SKU</button><div class="sale-total-bar"><span>SALE TOTAL</span><strong id="sale_total_display">KSh 0.00</strong></div></section>
 <section class="card" style="margin-top:14px"><div class="section-head"><h2>Customer</h2><span class="pill">WALK-IN OR CREDIT CUSTOMER</span></div>
-<div class="form-grid"><div><label>Customer Type</label><select name="customer_mode" id="customer_mode" onchange="toggleCustomerMode()"><option value="WALK_IN">WALK-IN CUSTOMER</option><option value="CREDIT">CREDIT CUSTOMER</option></select></div></div>
+<div class="form-grid"><div><label>Customer Type</label><select name="customer_mode" id="customer_mode" onchange="toggleCustomerMode()"><option value="WALK_IN">WALK-IN CUSTOMER</option>__CREDIT_OPTION__</select></div></div>
 <div id="credit_customer_panel" style="display:none;margin-top:14px"><div class="segmented"><label><input type="radio" name="credit_customer_choice" value="NEW" checked onchange="toggleCreditChoice()"> NEW CREDIT CUSTOMER</label><label><input type="radio" name="credit_customer_choice" value="EXISTING" onchange="toggleCreditChoice()"> EXISTING CUSTOMER</label></div>
 <div id="new_customer_panel" style="margin-top:12px"><div class="form-grid"><div><label>Full Name *</label><input name="new_customer_name" id="new_customer_name"></div><div><label>Phone Number *</label><input name="new_customer_phone" id="new_customer_phone"></div><div><label>ID Number / Passport *</label><input name="new_customer_id_no" id="new_customer_id_no"></div><div><label>Address / Location</label><input name="new_customer_address" id="new_customer_address"></div></div><div class="actions" style="margin-top:12px"><button class="btn gold" type="submit" name="customer_action" value="SAVE_NEW_CUSTOMER">SAVE NEW CUSTOMER</button></div></div>
 <div id="existing_customer_panel" style="display:none;margin-top:12px"><div class="form-grid"><div style="grid-column:1/-1"><label>Search by ID Number or First Name</label><div style="display:flex;gap:8px"><input id="customer_search" value="__SEARCH_QUERY__" placeholder="e.g. 12345678 or John"><button type="button" class="btn" onclick="searchCustomers()">SEARCH</button></div></div></div><div id="customer_search_results">__RESULT_HTML__</div><div id="selected_customer_card" class="selected-customer" style="display:none"></div>__SELECTED_CUSTOMER_HTML__<div class="actions" style="margin-top:12px"><button class="btn gold" type="submit" name="customer_action" value="SAVE_EXISTING_CUSTOMER">SAVE EXISTING CUSTOMER</button></div></div>
@@ -1124,12 +1249,14 @@ function toggleCreditChoice(){var el=document.querySelector('input[name="credit_
 function selectCustomer(id,name,phone,idNo,address){var choice=document.querySelector('input[name="credit_customer_choice"][value="EXISTING"]');if(choice)choice.checked=true;toggleCreditChoice();var hid=document.getElementById('selected_customer_id');if(hid)hid.value=String(id);var card=document.getElementById('selected_customer_card');if(card){card.style.display='block';card.innerHTML='<b>SELECTED EXISTING CUSTOMER</b><div>'+escapeHtml(name)+' · '+escapeHtml(phone||'')+'</div><div class="muted">ID: '+escapeHtml(idNo||'—')+' · '+escapeHtml(address||'')+'</div>';}var old=document.querySelector('#existing_customer_panel .selected-customer:not(#selected_customer_card)');if(old)old.style.display='none';var b=document.querySelector('button[name="customer_action"][value="SAVE_EXISTING_CUSTOMER"]');if(b)b.textContent='USE SELECTED CUSTOMER';}
 function searchCustomers(){var input=document.getElementById('customer_search'),box=document.getElementById('customer_search_results'),q=input?input.value.trim():'';if(!box)return;if(!q){box.innerHTML='<div class="flash error">Enter a customer name, ID number, or phone number.</div>';return;}box.innerHTML='<div class="muted">Searching registered customers…</div>';fetch('/api/customers/search?q='+encodeURIComponent(q),{headers:{'Accept':'application/json'},credentials:'same-origin',cache:'no-store'}).then(function(r){return r.text().then(function(raw){var d;try{d=JSON.parse(raw);}catch(e){throw new Error('Customer search did not return valid data. Refresh the page and sign in again.');}if(!r.ok)throw new Error(d.error||'Customer search failed.');return d;});}).then(function(d){var rows=d.results||[];if(!rows.length){box.innerHTML='<div class="flash error">No registered customer found. Check the spelling, ID number, or phone. Only register if this is genuinely a new customer.</div>';return;}box.innerHTML='<div class="search-results">'+rows.map(function(r){return '<div class="search-result"><div><b>'+escapeHtml(r.full_name)+'</b><div class="muted">ID: '+escapeHtml(r.id_no||'—')+' · Phone: '+escapeHtml(r.phone||'—')+'</div><div class="muted">'+escapeHtml(r.address||'')+'</div></div><button type="button" class="btn" data-customer-id="'+Number(r.id)+'">SELECT</button></div>';}).join('')+'</div>';box.querySelectorAll('button[data-customer-id]').forEach(function(b){b.addEventListener('click',function(){var r=rows.find(function(x){return Number(x.id)===Number(b.getAttribute('data-customer-id'));});if(r)selectCustomer(r.id,r.full_name,r.phone,r.id_no,r.address);});});}).catch(function(e){box.innerHTML='<div class="flash error">'+escapeHtml(e.message)+'</div>';});}
 function confirmDirectMpesa(i){var phoneEl=document.getElementById('mpesa_phone_'+i),phone=phoneEl?phoneEl.value.trim():'';var status=document.getElementById('mpesa_status_'+i),btn=document.getElementById('mpesa_confirm_'+i),csrf=document.querySelector('input[name=csrf]');var pp=document.getElementById('sale_product'),qq=document.getElementById('sale_qty');if(!phone){alert('Enter the customer M-Pesa phone number.');return;}if(!pp||!pp.value||!qq||!(parseInt(qq.value||'0',10)>0)){alert('Select the product and quantity first.');return;}status.textContent='Searching latest M-Pesa payment…';btn.disabled=true;var body=new URLSearchParams();body.set('csrf',csrf?csrf.value:'');body.set('phone',phone);body.set('product_id',pp.value);body.set('qty',qq.value);var st=document.getElementById('sale_type');body.set('sale_type',st?st.value:'RETAIL');var branchInput=document.querySelector('[name=branch_id]');body.set('branch_id',branchInput?branchInput.value:'');fetch('/api/mpesa/confirm-direct',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body.toString()}).then(function(r){return r.json().then(function(d){return {ok:r.ok,d:d};});}).then(function(x){if(!x.ok)throw new Error(x.d.error||'Unable to confirm payment.');var d=x.d;if(d.ok){status.textContent='PAYMENT CONFIRMED · SALE SAVED · '+d.receipt_no;window.location='/sales';return;}status.textContent=d.message||('Payment found: KSh '+Number(d.matched||0).toLocaleString('en-KE',{minimumFractionDigits:2})+' · Remaining: KSh '+Number(d.remaining||0).toLocaleString('en-KE',{minimumFractionDigits:2}));btn.disabled=false;}).catch(function(e){status.textContent=e.message;btn.disabled=false;});}
-function requestMpesa(i){var amt=parseFloat(document.getElementById('payment_amount_'+i).value||'0')||0;var phone=document.getElementById('mpesa_phone_'+i).value.trim();var status=document.getElementById('mpesa_status_'+i),btn=document.getElementById('mpesa_request_'+i),csrf=document.querySelector('input[name=csrf]');if(amt<=0){alert('Enter the payment amount first.');return;}if(!phone){alert('Enter the customer M-Pesa phone number.');return;}status.textContent='Sending M-Pesa prompt…';btn.disabled=true;var body=new URLSearchParams();body.set('csrf',csrf?csrf.value:'');body.set('amount',amt.toFixed(2));body.set('phone',phone);body.set('sequence_no',String(i));body.set('all_mpesa',Array.prototype.slice.call(document.querySelectorAll('select[name^=payment_method_]')).every(function(x){return x.value==='MPESA'})?'1':'');var pp=document.getElementById('sale_product');var qq=document.getElementById('sale_qty');if(pp&&qq){body.set('product_id',pp.value||'');body.set('qty',qq.value||'');var st=document.getElementById('sale_type');body.set('sale_type',st?st.value:'RETAIL');var branchInput=document.querySelector('[name=branch_id]');body.set('branch_id',branchInput?branchInput.value:'');var n=document.getElementById('payment_count');body.set('payment_count',n?n.value:'1');body.set('batch_id',(document.getElementById('mpesa_batch_id')||{}).value||'');var pprice=selectedProductPrice();body.set('total',(pprice*(parseFloat(qq.value||'0')||0)).toFixed(2));for(var j=1;j<=parseInt(n?n.value:'1',10);j++){var ai=document.getElementById('payment_amount_'+j);body.set('payment_amount_'+j,ai?ai.value:'0');}}fetch('/api/mpesa/stk-request',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body.toString()}).then(function(r){return r.json().then(function(d){return {ok:r.ok,d:d};});}).then(function(x){if(!x.ok)throw new Error(x.d.error||'Unable to send M-Pesa prompt.');status.textContent='Prompt sent. Waiting for customer payment…';if(x.d.batch_id){var bh=document.getElementById('mpesa_batch_id');if(bh)bh.value=x.d.batch_id;}var checkout=x.d.CheckoutRequestID||x.d.checkout_request_id,tries=0;var timer=setInterval(function(){tries++;fetch('/api/mpesa/stk-status?checkout_request_id='+encodeURIComponent(checkout),{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){if(d.status==='SUCCESS'&&d.mpesa_code){clearInterval(timer);document.getElementById('mpesa_code_'+i).value=d.mpesa_code;status.textContent=d.auto_saved?'PAYMENT RECEIVED · SALE SAVED AUTOMATICALLY · '+d.mpesa_code:'PAYMENT RECEIVED · M-Pesa code '+d.mpesa_code;btn.textContent=d.auto_saved?'SALE SAVED':'PAYMENT RECEIVED';if(d.auto_saved){window.location='/sales';return;}}else if(d.status==='FAILED'){clearInterval(timer);status.textContent='Payment failed: '+(d.message||'Customer did not complete payment.');btn.disabled=false;}else if(tries>=60){clearInterval(timer);status.textContent='Still pending. Check M-Pesa Monitor.';btn.disabled=false;}}).catch(function(){if(tries>=60){clearInterval(timer);status.textContent='Unable to check payment status.';btn.disabled=false;}});},2000);}).catch(function(e){status.textContent=e.message;btn.disabled=false;});}
+function requestMpesa(i){var amt=parseFloat(document.getElementById('payment_amount_'+i).value||'0')||0;var phone=document.getElementById('mpesa_phone_'+i).value.trim();var status=document.getElementById('mpesa_status_'+i),btn=document.getElementById('mpesa_request_'+i),csrf=document.querySelector('input[name=csrf]');if(amt<=0){alert('Enter the payment amount first.');return;}if(!phone){alert('Enter the customer M-Pesa phone number.');return;}status.textContent='Sending M-Pesa prompt…';btn.disabled=true;var body=new URLSearchParams();body.set('csrf',csrf?csrf.value:'');body.set('amount',amt.toFixed(2));body.set('phone',phone);body.set('sequence_no',String(i));body.set('all_mpesa',Array.prototype.slice.call(document.querySelectorAll('select[name^=payment_method_]')).every(function(x){return x.value==='MPESA'})?'1':'');var pp=document.getElementById('sale_product');var qq=document.getElementById('sale_qty');if(pp&&qq){body.set('product_id',pp.value||'');body.set('qty',qq.value||'');var st=document.getElementById('sale_type');body.set('sale_type',st?st.value:'RETAIL');var branchInput=document.querySelector('[name=branch_id]');body.set('branch_id',branchInput?branchInput.value:'');var n=document.getElementById('payment_count');body.set('payment_count',n?n.value:'1');body.set('batch_id',(document.getElementById('mpesa_batch_id')||{}).value||'');var pprice=selectedProductPrice();body.set('total',(pprice*(parseFloat(qq.value||'0')||0)).toFixed(2));for(var j=1;j<=parseInt(n?n.value:'1',10);j++){var ai=document.getElementById('payment_amount_'+j);body.set('payment_amount_'+j,ai?ai.value:'0');}}fetch('/api/mpesa/stk-request',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body.toString()}).then(function(r){return r.json().then(function(d){return {ok:r.ok,d:d};});}).then(function(x){if(!x.ok)throw new Error(x.d.error||'Unable to send M-Pesa prompt.');status.textContent='Prompt sent. Waiting for customer payment…';if(x.d.batch_id){var bh=document.getElementById('mpesa_batch_id');if(bh)bh.value=x.d.batch_id;}var checkout=x.d.CheckoutRequestID||x.d.checkout_request_id,tries=0;var timer=setInterval(function(){tries++;fetch('/api/mpesa/stk-status?checkout_request_id='+encodeURIComponent(checkout),{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){if(d.status==='SUCCESS'&&d.mpesa_code){clearInterval(timer);document.getElementById('mpesa_code_'+i).value=d.mpesa_code;status.textContent=d.message||(d.auto_saved?'PAYMENT RECEIVED · SALE SAVED AUTOMATICALLY · '+d.mpesa_code:'PAYMENT RECEIVED · M-Pesa code '+d.mpesa_code+' · Click SAVE SALE to finish.');btn.textContent=d.auto_saved?'SALE SAVED':'PAYMENT RECEIVED';btn.disabled=false;if(d.auto_saved){window.location='/sales';return;}}else if(d.status==='FAILED'||d.status==='REVIEW'){clearInterval(timer);status.textContent=d.message||'M-Pesa payment needs Administrator review.';btn.disabled=false;}else if(tries>=60){clearInterval(timer);status.textContent='Still pending. Check M-Pesa Monitor.';btn.disabled=false;}}).catch(function(){if(tries>=60){clearInterval(timer);status.textContent='Unable to check payment status.';btn.disabled=false;}});},2000);}).catch(function(e){status.textContent=e.message;btn.disabled=false;});}
 function escapeHtml(v){return String(v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
-window.addEventListener('DOMContentLoaded',function(){renderPaymentRows();showRegisteredPrice();toggleCustomerMode();if(document.getElementById('selected_customer_id').value){document.getElementById('customer_mode').value='CREDIT';document.querySelector('input[value="EXISTING"]').checked=true;toggleCustomerMode();toggleCreditChoice();}var form=document.getElementById('sales_form');if(form){form.addEventListener('submit',function(ev){var mode=document.getElementById('customer_mode').value;if(mode==='CREDIT'){if(!document.getElementById('due_date').value||!document.getElementById('collateral').value.trim()){ev.preventDefault();alert('Credit invoices require a due date and collateral details.');return;}}else{var count=parseInt(document.getElementById('payment_count').value||'1',10);for(var i=1;i<=count;i++){var m=document.getElementById('payment_method_'+i),c=document.getElementById('mpesa_code_'+i);if(m&&m.value==='MPESA'&&c&&!c.value.trim()){ev.preventDefault();c.required=true;c.focus();alert('Enter the M-Pesa transaction code for every M-Pesa payment.');return;}}}});}});
+window.addEventListener('DOMContentLoaded',function(){renderPaymentRows();showRegisteredPrice();toggleCustomerMode();if(document.getElementById('selected_customer_id').value){document.getElementById('customer_mode').value='CREDIT';document.querySelector('input[value="EXISTING"]').checked=true;toggleCustomerMode();toggleCreditChoice();}var form=document.getElementById('sales_form');if(form){form.addEventListener('submit',function(ev){var mode=document.getElementById('customer_mode').value;if(mode==='CREDIT'){if(!document.getElementById('due_date').value||!document.getElementById('collateral').value.trim()){ev.preventDefault();alert('Credit invoices require a due date and collateral details.');return;}}else{var count=parseInt(document.getElementById('payment_count').value||'1',10);for(var i=1;i<=count;i++){var m=document.getElementById('payment_method_'+i),c=document.getElementById('mpesa_code_'+i);if(__REQUIRE_MPESA_CODE__&&m&&m.value==='MPESA'&&c&&!c.value.trim()){ev.preventDefault();c.required=true;c.focus();alert('Enter the M-Pesa transaction code for every M-Pesa payment.');return;}}}});}});
 </script>'''
     recent=html_table(['Date & Time','Receipt','Customer','Type','Total','Recorded By','Actions'],[[esc(r['sold_at']),esc(r['receipt_no']),esc(r['customer']),esc(r['customer_type']+' · '+r['sale_type']),money(r['total']),esc(r['user_name']),f'<div class="inline-actions"><a class="btn" href="/sales/receipt?receipt={quote(r["receipt_no"])}">OPEN INVOICE / VIEW</a><a class="btn" href="/sales/export?receipt={quote(r["receipt_no"])}&format=pdf">PDF</a><a class="btn" href="/sales/export?receipt={quote(r["receipt_no"])}&format=xlsx">EXCEL</a></div>'] for r in rows])
-    content=content.replace('__NOTICE__',notice).replace('__CSRF__',csrf_input(CURRENT_HANDLER)).replace('__BRANCH_FIELD__',branch_field).replace('__FULL_NAME__',esc(u['full_name'])).replace('__PRODUCT_OPTS__',product_opts).replace('__SEARCH_QUERY__',esc(search_query)).replace('__RESULT_HTML__',result_html).replace('__PAYMENTS__',payments).replace('__PAYMENT_OPTIONS__',''.join(f'<option value="{i}" {"selected" if i==default_payment_count else ""}>{i}</option>' for i in range(1,max_payments+1))).replace('__MAX_PAYMENTS__',str(max_payments)).replace('__MAX_TX__',str(max_payments)).replace('__RECENT_SALES__',recent).replace('__SELECTED_CUSTOMER_ID__',selected_customer_id_val).replace('__SELECTED_CUSTOMER_HTML__',selected_customer_html)
+    credit_option='<option value="CREDIT">CREDIT CUSTOMER</option>' if core.get_setting('allow_credit_sales','YES')=='YES' else ''
+    require_mpesa_code_js='true' if core.get_setting('require_mpesa_code','YES')=='YES' else 'false'
+    content=content.replace('__CREDIT_OPTION__',credit_option).replace('__REQUIRE_MPESA_CODE__',require_mpesa_code_js).replace('__NOTICE__',notice).replace('__CSRF__',csrf_input(CURRENT_HANDLER)).replace('__BRANCH_FIELD__',branch_field).replace('__FULL_NAME__',esc(u['full_name'])).replace('__PRODUCT_OPTS__',product_opts).replace('__SEARCH_QUERY__',esc(search_query)).replace('__RESULT_HTML__',result_html).replace('__PAYMENTS__',payments).replace('__PAYMENT_OPTIONS__',''.join(f'<option value="{i}" {"selected" if i==default_payment_count else ""}>{i}</option>' for i in range(1,max_payments+1))).replace('__MAX_PAYMENTS__',str(max_payments)).replace('__MAX_TX__',str(max_payments)).replace('__RECENT_SALES__',recent).replace('__SELECTED_CUSTOMER_ID__',selected_customer_id_val).replace('__SELECTED_CUSTOMER_HTML__',selected_customer_html)
     return layout(u,'Sales / POS',branch_selector+content,'/sales','Direct sales entry')
 
 
@@ -1274,6 +1401,8 @@ def expense_page(u, message='', query=None):
     rows=core.expense_report_data(start,end,branch_id)
     selector=branch_scope_selector(u,query,'/expenses')
     notice=f'<div class="flash error">{esc(message)}</div>' if message else ''
+    expense_categories=[x.strip() for x in core.get_setting('expense_categories','Rent,Utilities,Wages,Transport,Licensing,Repairs,Security,Marketing,Bank Charges,Other').split(',') if x.strip()]
+    category_opts=''.join(f'<option>{esc(x)}</option>' for x in expense_categories)
     branch_opts=''
     if role_name(u) in ('ADMIN','MANAGEMENT'):
         c=core.db.c(); brs=[dict(b) for b in c.execute('SELECT id,name FROM branches WHERE active=1 ORDER BY name').fetchall()]; c.close()
@@ -1290,7 +1419,7 @@ def expense_page(u, message='', query=None):
     else:
         report_table=html_table(['Date & Time','Expense','Category','Description','Amount','Payment','Reference','Recorded By'],[[esc(r['expense_date']),esc(r['expense_no']),esc(r['category']),esc(r['description']),money(r['amount']),esc(r['payment_method']),esc(r['reference'] or ''),esc(r['attended_by'])] for r in rows],'No expenses for selected period.')
     exp=f'/report/export?kind=expenses&format={{fmt}}&start={esc(start)}&end={esc(end)}'
-    content=f'''{selector}{notice}<section class="card"><div class="section-head"><h2>Business Expenses</h2><span class="pill">ACCOUNTABLE: {esc(u['full_name'])}</span></div><form method="post" action="/expenses">{csrf_input(CURRENT_HANDLER)}{branch_opts}<input type="hidden" id="expense_line_count" name="expense_line_count" value="1"><div class="form-grid"><div><label>Payment</label><select name="payment_method"><option>Cash</option><option>M-Pesa</option><option>Bank</option></select></div><div><label>Reference / Receipt No.</label><input name="reference"></div></div><div class="section-head" style="margin-top:14px"><h3>Expense items</h3><button type="button" class="btn" onclick="addExpenseLine()">+ ADD LINE</button></div><div id="expense_lines"><div class="form-grid expense-line" style="border:1px solid var(--line);padding:10px;border-radius:10px;margin-bottom:8px"><div><label>Category *</label><select name="category_1" required><option>Rent</option><option>Utilities</option><option>Wages</option><option>Transport</option><option>Licensing</option><option>Repairs</option><option>Security</option><option>Marketing</option><option>Bank Charges</option><option>Other</option></select></div><div><label>Description *</label><input name="description_1" required></div><div><label>Amount (KES) *</label><input type="number" name="amount_1" min="0.01" step="0.01" required></div></div></div><div class="actions" style="margin-top:14px"><button class="btn gold" type="submit">SAVE EXPENSES</button><button class="btn" type="reset">CLEAR</button></div><script>
+    content=f'''{selector}{notice}<section class="card"><div class="section-head"><h2>Business Expenses</h2><span class="pill">ACCOUNTABLE: {esc(u['full_name'])}</span></div><form method="post" action="/expenses">{csrf_input(CURRENT_HANDLER)}{branch_opts}<input type="hidden" id="expense_line_count" name="expense_line_count" value="1"><div class="form-grid"><div><label>Payment</label><select name="payment_method"><option>Cash</option><option>M-Pesa</option><option>Bank</option></select></div><div><label>Reference / Receipt No.</label><input name="reference"></div></div><div class="section-head" style="margin-top:14px"><h3>Expense items</h3><button type="button" class="btn" onclick="addExpenseLine()">+ ADD LINE</button></div><div id="expense_lines"><div class="form-grid expense-line" style="border:1px solid var(--line);padding:10px;border-radius:10px;margin-bottom:8px"><div><label>Category *</label><select name="category_1" required>{category_opts}</select></div><div><label>Description *</label><input name="description_1" required></div><div><label>Amount (KES) *</label><input type="number" name="amount_1" min="0.01" step="0.01" required></div></div></div><div class="actions" style="margin-top:14px"><button class="btn gold" type="submit">SAVE EXPENSES</button><button class="btn" type="reset">CLEAR</button></div><script>
 function addExpenseLine(){{var box=document.getElementById('expense_lines'),first=box.querySelector('.expense-line'),n=Number(document.getElementById('expense_line_count').value||1)+1,row=first.cloneNode(true);document.getElementById('expense_line_count').value=n;row.querySelectorAll('[name],[id]').forEach(function(e){{if(e.name)e.name=e.name.replace(/_\\d+$/,'_'+n);if(e.id)e.id=e.id.replace(/_\\d+$/,'_'+n)}});row.querySelectorAll('input').forEach(function(e){{e.value=''}});box.appendChild(row)}}
 </script></form></section></section><section class="card" style="margin-top:14px"><div class="section-head"><h2>Expense Report</h2><span class="pill">{esc(preset)}</span></div>{range_toolbar('/expenses',fd,ft,td,tt,branch_id)}<div class="actions" style="margin-top:10px"><button type="button" class="btn" onclick="window.print()">PRINT REPORT</button><a class="btn" href="{exp.format(fmt='pdf')}">DOWNLOAD PDF</a><a class="btn" href="{exp.format(fmt='xlsx')}">DOWNLOAD EXCEL</a></div><div class="report-print">{report_table}</div></section>'''
     return layout(u,'Expenses',content,'/expenses','Expense entry and expense reporting')
@@ -1454,10 +1583,10 @@ def live_page(u, query=None):
 
 def products_page(u, message='', query=None):
     role=role_name(u)
-    if role not in ('ADMIN','SALES') or not allowed(u,'MANAGE_PRODUCTS'):
+    if role not in ('ADMIN','MANAGEMENT','SALES') or not allowed(u,'MANAGE_PRODUCTS'):
         raise PermissionError('Product Registration is disabled for your account. Contact Administrator.')
     c=core.db.c(); branches=[dict(x) for x in c.execute('SELECT id,name FROM branches WHERE active=1 ORDER BY name').fetchall()]
-    if role=='ADMIN':
+    if role in ('ADMIN','MANAGEMENT'):
         raw=_qsval(query or {},'branch_id',''); branch_id=int(raw) if str(raw).isdigit() else 0
         if branch_id and not any(int(b['id'])==branch_id for b in branches): c.close(); raise PermissionError('Selected branch is unavailable.')
     else: branch_id=int(u.get('branch_id') or 0)
@@ -1485,13 +1614,13 @@ def products_page(u, message='', query=None):
         title='Product Registration & Branch Stock Editor'; subtitle='Edit costs and prices for the selected branch'
     else:
         table=html_table(['Product Name','SKU','Category','Unit','Retail / Wholesale Price','Stock','Reorder','Status'],[[esc(r['name']),esc(r['sku']),esc(r['category']),esc(r['unit']),money(r['branch_sell_price'])+' / '+money(r.get('branch_wholesale_price') or r['branch_sell_price']),r['branch_qty'],r['branch_reorder'],'ACTIVE' if r['active'] else 'ARCHIVED'] for r in rows])
-        extra=f'<section class="card" style="margin-top:14px"><div class="notice">Sales Person can register products with separate retail and wholesale prices. Product catalogue entries are shared, but stock, costs and prices remain branch-specific; existing branch prices and costs can only be changed by the Administrator.</div>{table}</section>'
-        title='Product Registration'; subtitle='Sales Person product registration access'
+        extra=f'<section class="card" style="margin-top:14px"><div class="notice">Management and Sales Person can register products with separate retail and wholesale prices. Product catalogue entries are shared, but stock, costs and prices remain branch-specific; existing branch prices and costs can only be changed by the Administrator.</div>{table}</section>'
+        title='Product Registration'; subtitle='Management and Sales Person product registration access'
     product_opening_opts=''.join(f'<option value="{r["id"]}">{esc(r["name"])} · {esc(r["sku"])}</option>' for r in rows if r['active'])
-    branch_opening_opts=('<option value="">Select branch</option>'+''.join(f'<option value="{b["id"]}" {"selected" if int(b["id"])==branch_id else ""}>{esc(b["name"])}</option>' for b in branches)) if role=='ADMIN' else f'<input type="hidden" name="branch_id" value="{branch_id}">'
-    branch_opening_field=f'<div><label>Branch</label><select name="branch_id" required>{branch_opening_opts}</select></div>' if role=='ADMIN' else branch_opening_opts
-    product_branch_field=f'<div><label>Opening Stock Branch *</label><select name="branch_id" required>{branch_opening_opts}</select></div>' if role=='ADMIN' else f'<input type="hidden" name="branch_id" value="{branch_id}">'
-    product_branch_selector=branch_scope_selector(u,{'branch_id':str(branch_id) if branch_id else ''},'/products') if role=='ADMIN' else ''
+    branch_opening_opts=('<option value="">Select branch</option>'+''.join(f'<option value="{b["id"]}" {"selected" if int(b["id"])==branch_id else ""}>{esc(b["name"])}</option>' for b in branches)) if role in ('ADMIN','MANAGEMENT') else f'<input type="hidden" name="branch_id" value="{branch_id}">'
+    branch_opening_field=f'<div><label>Branch</label><select name="branch_id" required>{branch_opening_opts}</select></div>' if role in ('ADMIN','MANAGEMENT') else branch_opening_opts
+    product_branch_field=f'<div><label>Opening Stock Branch *</label><select name="branch_id" required>{branch_opening_opts}</select></div>' if role in ('ADMIN','MANAGEMENT') else f'<input type="hidden" name="branch_id" value="{branch_id}">'
+    product_branch_selector=branch_scope_selector(u,{'branch_id':str(branch_id) if branch_id else ''},'/products') if role in ('ADMIN','MANAGEMENT') else ''
     opening_form=f'''<section class="card" style="margin-top:14px"><h3>Opening Stock — Existing Product in a Branch</h3><p class="muted">Enter the physically counted stock for a product in this branch once. The system will keep each branch balance separate.</p><form method="post" action="/products">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="opening"><div class="form-grid"><div><label>Product</label><select name="product_id" required>{product_opening_opts}</select></div>{branch_opening_field}<div><label>Physical Opening Quantity</label><input type="number" name="opening_qty" min="0.001" step="0.001" required></div><div><label>Unit Cost</label><input type="number" name="opening_cost" min="0.01" step="0.01" required></div><div><label>Reason / Stock Take Reference</label><input name="opening_reason" minlength="5" required placeholder="Physical opening stock count"></div></div><button class="btn gold" style="margin-top:12px">SAVE BRANCH OPENING STOCK</button></form></section>'''
     content=f'''{product_branch_selector}{notice}<section class="card"><div class="section-head"><h2>{esc(title)}</h2><span class="pill">{esc(u['full_name'])} · {esc(role_display(role))}</span></div><form method="post" action="/products"><div class="form-grid">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="create">{product_branch_field}<div><label>SKU *</label><div class="scan-inline"><div><input name="sku" id="product_sku" required></div><button type="button" class="btn scan-btn" onclick="openScannerFill('product_sku')">SCAN</button></div></div><div><label>Product Name *</label><input name="name" required></div><div><label>Category *</label><input name="category" placeholder="Wine, Spirit, Beer..." required></div><div><label>Unit</label><input name="unit" value="{esc(core.get_setting('default_unit','bottle'))}" required></div><div><label>Retail Selling Price</label><input type="number" name="sell_price" min="0.01" step="0.01" required></div><div><label>Wholesale Selling Price</label><input type="number" name="wholesale_price" min="0.01" step="0.01" required><small class="muted">Catalogue is shared; stock quantity is recorded only in the selected branch.</small></div><div><label>Opening Stock</label><input type="number" name="stock_qty" min="0" step="1" required></div><div><label>COGS / Unit Cost (KSh) — Cost of Goods Sold *</label><input type="number" name="cogs_unit_cost" min="0" step="0.01" value="0" required><small class="muted">Enter the cost you pay per unit. Required to calculate accurate profit and COGS.</small></div><div><label>Reorder Level</label><input type="number" name="reorder_level" min="0" step="1" value="{esc(core.get_setting('default_reorder_level','5'))}" required></div></div><div class="actions" style="margin-top:14px"><button class="btn gold" type="submit">SAVE PRODUCT</button></div></form></section>{opening_form}{extra}'''
     return layout(u,title,content,'/products',subtitle)
@@ -1550,15 +1679,17 @@ def branch_performance_page(u, query=None):
 def settings_page(u, message=''):
     if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
     s=core.get_settings(); payload=core.permissions_payload(u); notice=f'<div class="flash error">{esc(message)}</div>' if message else ''
+    subscription_due_day=int(float(s.get('subscription_due_day','5')))
+    subscription_due_day_label=f"{subscription_due_day}{'st' if subscription_due_day==1 else 'nd' if subscription_due_day==2 else 'rd' if subscription_due_day==3 else 'th'}"
     role_rows=[]
     for d in payload['definitions']:
         k=d['key']; m='checked' if payload['roles']['MANAGEMENT'].get(k) else ''; sa='checked' if payload['roles']['SALES'].get(k) else ''
-        management_locked=k in core.MANAGEMENT_UNSUPPORTED_PERMISSION_KEYS or k in core.ADMIN_ONLY_PERMISSION_KEYS
+        management_locked=k in core.ADMIN_ONLY_PERMISSION_KEYS
         sales_locked=k in core.ADMIN_ONLY_PERMISSION_KEYS
         management_lock_attr='disabled title="Not available to Management"' if management_locked else ''
         sales_lock_attr='disabled title="Administrator only"' if sales_locked else ''
         role_rows.append([esc(d['label']),esc(d['description']),f'<input type="checkbox" name="perm_m_{esc(k)}" {m} {management_lock_attr}>',f'<input type="checkbox" name="perm_s_{esc(k)}" {sa} {sales_lock_attr}>'])
-    main_fields=[('business_name','Business Name','text',''),('business_subtitle','Business Subtitle','text',''),('business_phone','Business Phone','text',''),('business_address','Business Address','text',''),('business_website','Business Website','text',''),('business_tax_pin','KRA PIN / Tax PIN','text',''),('business_branch_name','Branch / Seat Name','text',''),('receipt_footer','Receipt Footer Message','text',''),('report_footer','Report Footer Message','text',''),('currency','Currency','text',''),('receipt_prefix','Receipt Prefix','text',''),('idle_timeout_minutes','Auto Logout (Minutes)','number','min="1" max="120"'),('live_refresh_seconds','Live Refresh (Seconds)','number','min="2" max="120"'),('default_reorder_level','Default Reorder Level','number','min="0"'),('default_unit','Default Product Unit','text',''),('default_payment_transactions','Default Payment Transactions','number','min="1" max="5"'),('max_payment_transactions','Maximum Payment Transactions','number','min="1" max="5"'),('report_default_days','Default Report Days','number','min="1" max="365"'),('performance_green_threshold_pct','Business Performance Green Threshold (%)','number','min="1" max="100"')]
+    main_fields=[('business_name','Business Name','text',''),('business_subtitle','Business Subtitle','text',''),('business_phone','Business Phone','text',''),('business_address','Business Address','text',''),('business_website','Business Website','text',''),('business_tax_pin','KRA PIN / Tax PIN','text',''),('business_branch_name','Branch / Seat Name','text',''),('receipt_footer','Receipt Footer Message','text',''),('report_footer','Report Footer Message','text',''),('currency','Currency','text',''),('receipt_prefix','Receipt Prefix','text',''),('idle_timeout_minutes','Auto Logout (Minutes)','number','min="1" max="120"'),('live_refresh_seconds','Live Refresh (Seconds)','number','min="2" max="120"'),('default_reorder_level','Default Reorder Level','number','min="0"'),('default_unit','Default Product Unit','text',''),('expense_categories','Expense Categories (comma-separated)','text',''),('default_payment_transactions','Default Payment Transactions','number','min="1" max="5"'),('max_payment_transactions','Maximum Payment Transactions','number','min="1" max="5"'),('report_default_days','Default Report Days','number','min="1" max="365"'),('performance_green_threshold_pct','Business Performance Green Threshold (%)','number','min="1" max="100"')]
     fields=''.join(f'<div><label>{esc(label)}</label><input type="{typ}" name="{key}" value="{esc(s.get(key,""))}" {attrs}></div>' for key,label,typ,attrs in main_fields)
     credit_yes='selected' if s.get('allow_credit_sales','YES')=='YES' else ''; credit_no='selected' if s.get('allow_credit_sales','YES')=='NO' else ''
     mp_yes='selected' if s.get('require_mpesa_code','YES')=='YES' else ''; mp_no='selected' if s.get('require_mpesa_code','YES')=='NO' else ''
@@ -1572,7 +1703,7 @@ def settings_page(u, message=''):
     report_labels=[('report_end_day','End Day Report','END DAY REPORT'),('report_end_week','End Week Report','END WEEK REPORT'),('report_today','Today','TODAY'),('report_this_week','This Week Report','THIS WEEK REPORT'),('report_monthly','Monthly Report','MONTHLY REPORT'),('report_this_month','This Month','THIS MONTH'),('report_last_month','Last Month','LAST MONTH'),('report_this_year','This Year','THIS YEAR'),('report_last_year','Last Year','LAST YEAR')]
     report_html=''.join(f'<div><label>{esc(label)}</label><input name="{key}" value="{esc(s.get(key,default))}"></div>' for key,label,default in report_labels)
     logo_note='Custom business logo is currently active.' if business_logo_path() else 'Default MONTEZ LIQUOR logo is currently active.'
-    content=f'''{notice}<section class="card"><div class="section-head"><h2>Administrator Settings</h2><span class="pill">NO CODING REQUIRED</span></div><form method="post" action="/settings">{csrf_input(CURRENT_HANDLER)}<div><label>Reason for these changes (required)</label><input name="change_reason" required minlength="5" placeholder="Explain why these settings are changing"></div><div class="form-grid">{fields}</div><h3 style="margin-top:18px">Role & Menu Labels</h3><div class="form-grid">{label_html}</div><div class="actions" style="margin-top:14px"><button class="btn gold">SAVE SETTINGS</button></div></form></section><section class="card" style="margin-top:14px"><div class="section-head"><h3>Report Button Labels</h3><span class="pill">EDIT WITHOUT CODING</span></div><form method="post" action="/settings">{csrf_input(CURRENT_HANDLER)}<div><label>Reason for these changes (required)</label><input name="change_reason" required minlength="5" placeholder="Explain why report labels are changing"></div><div class="form-grid">{report_html}</div><div class="actions" style="margin-top:12px"><button class="btn gold">SAVE REPORT LABELS</button></div></form></section><section class="card" style="margin-top:14px"><div class="section-head"><h3>Business Logo / Picture</h3><span class="pill">MAX 5 MB</span></div><p class="muted">{esc(logo_note)}</p><div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap"><img src="/business-logo" style="width:90px;height:90px;object-fit:contain;border:1px solid var(--line);border-radius:12px;background:#fff;padding:8px"><form method="post" action="/settings/logo" enctype="multipart/form-data">{csrf_input(CURRENT_HANDLER)}<input name="change_reason" placeholder="Reason for logo change" required minlength="5"><input type="file" name="logo" accept="image/png,image/jpeg,image/webp" required><div style="margin-top:10px"><button class="btn gold">UPLOAD BUSINESS LOGO</button></div></form><form method="post" action="/settings/logo">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="remove_logo" value="1"><input name="change_reason" placeholder="Reason for logo removal" required minlength="5"><button class="btn danger">REMOVE CUSTOM LOGO</button></form></div></section>{mpesa_section}<section class="card" style="margin-top:14px"><div class="section-head"><h3>MONTEZ LIQUOR Software Subscription</h3><span class="pill">ADMINISTRATOR ONLY</span></div><p class="muted">Monthly subscription. November 2026 is exempt; the first payment is due 5 December 2026. Thereafter, payment is due on the 5th of each month. Non-administrator access is automatically suspended when the due date passes without confirmation. Administrator access remains available.</p><div class="form-grid"><div><label>Monthly Subscription Amount (KSh)</label><input value="{esc(s.get('subscription_monthly_amount','Not set'))}" readonly></div><div><label>Paybill Number</label><input value="516600" readonly></div><div><label>Account Number</label><input value="319851" readonly></div><div><label>Due Date</label><input value="5th of every month" readonly></div><div><label>Billing Status</label><input value="{ 'SUSPENDED — PAYMENT OVERDUE' if subscription_billing_state().get('suspended') else ('PAID' if subscription_billing_state().get('paid') else 'UPCOMING / NOT YET DUE') }" readonly></div><div><label>Billing Month</label><input value="{esc(subscription_billing_state().get('due_month') or 'Exempt until December 2026')}" readonly></div></div><form method="post" action="/settings" style="margin-top:12px">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="subscription_settings_only" value="1"><div class="form-grid"><div><label>Reason for subscription setting change (required)</label><input name="change_reason" required minlength="5" placeholder="Explain why the subscription amount is changing"></div><div><label>Monthly Subscription Amount (KSh)</label><input type="number" name="subscription_monthly_amount" min="1" max="10000000" step="0.01" required value="{esc(s.get('subscription_monthly_amount',''))}" placeholder="Enter monthly amount"></div></div><div class="actions" style="margin-top:12px"><button class="btn gold">SAVE SUBSCRIPTION SETTINGS</button></div></form><hr><h3>Confirm Monthly M-PESA Payment</h3><p class="muted">After checking the payment in the Paybill statement, the Administrator enters the transaction code here. This is a manual verification step; it does not yet connect to Paybill 516600 automatically.</p><form method="post" action="/subscription/confirm">{csrf_input(CURRENT_HANDLER)}<div class="form-grid"><div><label>Billing Month</label><input name="billing_month" value="{esc(subscription_billing_state().get('due_month') or '')}" readonly required></div><div><label>Amount Received (KSh)</label><input type="number" name="amount" min="0.01" step="0.01" value="{esc(s.get('subscription_monthly_amount',''))}" required></div><div><label>M-PESA Transaction Code</label><input name="mpesa_code" maxlength="15" minlength="8" required placeholder="Enter receipt code"></div><div><label>Reason / Verification Note</label><input name="change_reason" minlength="5" required placeholder="Verified against Paybill statement"></div></div><div class="actions" style="margin-top:12px"><button class="btn gold">CONFIRM SUBSCRIPTION PAYMENT</button></div></form><p class="muted">Last confirmed: {esc(s.get('subscription_last_paid_at','Not yet paid'))} · M-PESA code: {esc(s.get('subscription_last_mpesa_code','—'))}</p></section><section class="card" style="margin-top:14px"><div class="section-head"><h3>Management & Sales Permissions</h3><span class="pill">TICK TO ALLOW · UNTICK TO RESTRICT</span></div><p class="muted">Administrator / Developer always has full access. Every supported permission below can be granted or restricted independently for Management and Sales Person. Administrator-only controls and functions not supported for a role are locked so the screen cannot promise access that the application does not provide.</p><form method="post" action="/settings"><input type="hidden" name="permissions_only" value="1">{csrf_input(CURRENT_HANDLER)}<div><label>Reason for permission changes (required)</label><input name="change_reason" required minlength="5" placeholder="Explain why access is changing"></div>{html_table(['Permission','Purpose','Management','Sales Person'],role_rows)}<div class="actions" style="margin-top:12px"><button class="btn gold">SAVE ROLE PERMISSIONS</button></div></form></section>'''
+    content=f'''{notice}<section class="card"><div class="section-head"><h2>Administrator Settings</h2><span class="pill">NO CODING REQUIRED</span></div><form method="post" action="/settings">{csrf_input(CURRENT_HANDLER)}<div><label>Reason for these changes (required)</label><input name="change_reason" required minlength="5" placeholder="Explain why these settings are changing"></div><div class="form-grid">{fields}</div><h3 style="margin-top:18px">Role & Menu Labels</h3><div class="form-grid">{label_html}</div><div class="actions" style="margin-top:14px"><button class="btn gold">SAVE SETTINGS</button></div></form></section><section class="card" style="margin-top:14px"><div class="section-head"><h3>Report Button Labels</h3><span class="pill">EDIT WITHOUT CODING</span></div><form method="post" action="/settings">{csrf_input(CURRENT_HANDLER)}<div><label>Reason for these changes (required)</label><input name="change_reason" required minlength="5" placeholder="Explain why report labels are changing"></div><div class="form-grid">{report_html}</div><div class="actions" style="margin-top:12px"><button class="btn gold">SAVE REPORT LABELS</button></div></form></section><section class="card" style="margin-top:14px"><div class="section-head"><h3>Business Logo / Picture</h3><span class="pill">MAX 5 MB</span></div><p class="muted">{esc(logo_note)}</p><div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap"><img src="/business-logo" style="width:90px;height:90px;object-fit:contain;border:1px solid var(--line);border-radius:12px;background:#fff;padding:8px"><form method="post" action="/settings/logo" enctype="multipart/form-data">{csrf_input(CURRENT_HANDLER)}<input name="change_reason" placeholder="Reason for logo change" required minlength="5"><input type="file" name="logo" accept="image/png,image/jpeg,image/webp" required><div style="margin-top:10px"><button class="btn gold">UPLOAD BUSINESS LOGO</button></div></form><form method="post" action="/settings/logo">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="remove_logo" value="1"><input name="change_reason" placeholder="Reason for logo removal" required minlength="5"><button class="btn danger">REMOVE CUSTOM LOGO</button></form></div></section>{mpesa_section}<section class="card" style="margin-top:14px"><div class="section-head"><h3>MONTEZ LIQUOR Software Subscription</h3><span class="pill">ADMINISTRATOR ONLY</span></div><p class="muted">Monthly subscription. The first billable month and recurring due day are configured below. Non-administrator access is automatically suspended when the configured due date passes without confirmation. Administrator access remains available.</p><div class="form-grid"><div><label>Monthly Subscription Amount (KSh)</label><input value="{esc(s.get('subscription_monthly_amount','Not set'))}" readonly></div><div><label>Paybill Number</label><input value="{esc(s.get('subscription_paybill','516600'))}" readonly></div><div><label>Account Number</label><input value="{esc(s.get('subscription_account','319851'))}" readonly></div><div><label>Due Date</label><input value="{subscription_due_day_label} of every month" readonly></div><div><label>Billing Status</label><input value="{ 'SUSPENDED — PAYMENT OVERDUE' if subscription_billing_state().get('suspended') else ('PAID' if subscription_billing_state().get('paid') else 'UPCOMING / NOT YET DUE') }" readonly></div><div><label>Billing Month</label><input value="{esc(subscription_billing_state().get('due_month') or 'Not yet due')}" readonly></div></div><form method="post" action="/settings" style="margin-top:12px">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="subscription_settings_only" value="1"><div class="form-grid"><div><label>Reason for subscription setting change (required)</label><input name="change_reason" required minlength="5" placeholder="Explain why the subscription amount is changing"></div><div><label>Monthly Subscription Amount (KSh)</label><input type="number" name="subscription_monthly_amount" min="1" max="10000000" step="0.01" required value="{esc(s.get('subscription_monthly_amount',''))}" placeholder="Enter monthly amount"></div><div><label>First Billable Month (YYYY-MM)</label><input name="subscription_first_month" required value="{esc(s.get('subscription_first_month','2026-12'))}"></div><div><label>Monthly Due Day (1–28)</label><input type="number" name="subscription_due_day" min="1" max="28" required value="{esc(s.get('subscription_due_day','5'))}"></div><div><label>Subscription Paybill</label><input name="subscription_paybill" required value="{esc(s.get('subscription_paybill','516600'))}"></div><div><label>Subscription Account</label><input name="subscription_account" required value="{esc(s.get('subscription_account','319851'))}"></div></div><div class="actions" style="margin-top:12px"><button class="btn gold">SAVE SUBSCRIPTION SETTINGS</button></div></form><hr><h3>Confirm Monthly M-PESA Payment</h3><p class="muted">After checking the payment in the configured Paybill statement, the Administrator enters the transaction code here. This is a manual verification step.</p><form method="post" action="/subscription/confirm">{csrf_input(CURRENT_HANDLER)}<div class="form-grid"><div><label>Billing Month</label><input name="billing_month" value="{esc(subscription_billing_state().get('due_month') or '')}" readonly required></div><div><label>Amount Received (KSh)</label><input type="number" name="amount" min="0.01" step="0.01" value="{esc(s.get('subscription_monthly_amount',''))}" required></div><div><label>M-PESA Transaction Code</label><input name="mpesa_code" maxlength="15" minlength="8" required placeholder="Enter receipt code"></div><div><label>Reason / Verification Note</label><input name="change_reason" minlength="5" required placeholder="Verified against Paybill statement"></div></div><div class="actions" style="margin-top:12px"><button class="btn gold">CONFIRM SUBSCRIPTION PAYMENT</button></div></form><p class="muted">Last confirmed: {esc(s.get('subscription_last_paid_at','Not yet paid'))} · M-PESA code: {esc(s.get('subscription_last_mpesa_code','—'))}</p></section><section class="card" style="margin-top:14px"><div class="section-head"><h3>Management & Sales Permissions</h3><span class="pill">TICK TO ALLOW · UNTICK TO RESTRICT</span></div><p class="muted">Administrator / Developer always has full access. Every supported permission below can be granted or restricted independently for Management and Sales Person. Administrator-only controls and functions not supported for a role are locked so the screen cannot promise access that the application does not provide.</p><form method="post" action="/settings"><input type="hidden" name="permissions_only" value="1">{csrf_input(CURRENT_HANDLER)}<div><label>Reason for permission changes (required)</label><input name="change_reason" required minlength="5" placeholder="Explain why access is changing"></div>{html_table(['Permission','Purpose','Management','Sales Person'],role_rows)}<div class="actions" style="margin-top:12px"><button class="btn gold">SAVE ROLE PERMISSIONS</button></div></form></section>'''
     return layout(u,'Administrator Settings',content,'/settings','Overall system parameters and permissions')
 
 
@@ -1593,7 +1724,10 @@ def pl_page(u, query=None):
 
 def backup_page(u):
     if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
-    content=f'<section class="card"><h2>Backup</h2><p class="muted">Create and download a full SQLite database backup.</p><a class="btn gold" href="/backup/download">DOWNLOAD BACKUP</a></section>'
+    backup_dir=os.path.join(DATA_DIR,'backups'); os.makedirs(backup_dir,exist_ok=True)
+    backups=sorted((f for f in os.listdir(backup_dir) if f.lower().endswith('.db')),reverse=True)
+    latest=f'<p class="muted">Latest saved backup: {esc(backups[0])}</p>' if backups else '<p class="muted">No saved backup yet. Download one now before continuing.</p>'
+    content=f'<section class="card"><h2>Database Backup</h2><p>Creates a fresh, consistent SQLite snapshot of the current MONTEZ LIQUOR database and downloads it to your device.</p>{latest}<div class="actions"><a class="btn gold" href="/backup/download">CREATE &amp; DOWNLOAD BACKUP</a></div><p class="muted" style="margin-top:12px">Keep the downloaded file somewhere safe outside Render. This backup includes the database records; it does not include Daraja Consumer Keys or other environment secrets.</p></section>'
     return layout(u,'Backup',content,'/backup')
 
 
@@ -1674,7 +1808,7 @@ def export_report_v2(handler, u, qs):
         title='MONTEZ LIQUOR PURCHASE REPORT'
     else:
         raise ValueError('Unknown report type.')
-    st=core.get_settings(); title=f"{st.get('business_name',APP_NAME)} · {st.get('business_branch_name','')} · {title}"
+    st=core.get_settings(); title=f"{st.get('business_name',APP_NAME)} · {st.get('business_branch_name','')} · {title} · PERIOD {start} TO {end}"
     out,ctype,fn=_export_rows(title,headers,data,fmt)
     return send_file(handler,out,ctype,fn)
 
@@ -1683,14 +1817,28 @@ def export_ledger_v2(handler,u,qs):
     start=_qsval(qs,'start'); end=_qsval(qs,'end'); fmt=_qsval(qs,'format','xlsx').lower()
     if not start or not end: raise ValueError('Report period is missing.')
     bid=branch_scope_for(u,qs); rows=core.ledger_data(start,end,bid); headers=['Date & Time','Reference','Description','Debit Account','Debit','Credit Account','Credit']
-    st=core.get_settings(); out,ctype,fn=_export_rows(f"{st.get('business_name',APP_NAME)} · {st.get('business_branch_name','')} · GENERAL LEDGER",headers,rows,fmt); return send_file(handler,out,ctype,fn)
+    st=core.get_settings(); out,ctype,fn=_export_rows(f"{st.get('business_name',APP_NAME)} · {st.get('business_branch_name','')} · GENERAL LEDGER · PERIOD {start} TO {end}",headers,rows,fmt); return send_file(handler,out,ctype,fn)
 
 def export_pl_v2(handler,u,qs):
     require_perm_user(u,'VIEW_LEDGER'); require_perm_user(u,'PRINT_EXPORT')
     start=_qsval(qs,'start'); end=_qsval(qs,'end'); fmt=_qsval(qs,'format','xlsx').lower()
     if not start or not end: raise ValueError('Report period is missing.')
-    bid=branch_scope_for(u,qs); d=core.pl_summary(start,end,bid); rows=[['Sales Revenue',d['revenue']],['Cost of Goods Sold',d['cogs']],['Gross Profit',d['gross_profit']],['Operating Expenses',d['expenses']],['Net Profit',d['net_profit']],['COGS Reliable Cost Coverage (%)',round(d['cogs_coverage_pct'],2)],['Sale Lines Missing Cost',d['cogs_missing_lines']],['Sale Lines Using Estimated Cost',d['cogs_estimated_lines']]]
-    headers=['Profit & Loss Item','Amount / Count']; st=core.get_settings(); out,ctype,fn=_export_rows(f"{st.get('business_name',APP_NAME)} · {st.get('business_branch_name','')} · PROFIT AND LOSS",headers,rows,fmt); return send_file(handler,out,ctype,fn)
+    bid=branch_scope_for(u,qs); d=core.pl_summary(start,end,bid)
+    revenue=float(d['revenue'] or 0); cogs=float(d['cogs'] or 0); gross=float(d['gross_profit'] or 0); expenses=float(d['expenses'] or 0); net=float(d['net_profit'] or 0)
+    pct=lambda value: round((100.0*value/revenue),2) if revenue else 0.0
+    rows=[
+        ['Sales Revenue',revenue,100.0,'Total recorded sales in the selected period'],
+        ['Less: Cost of Goods Sold (COGS)',cogs,pct(cogs),'Quantity sold × sale-time unit cost'],
+        ['Gross Profit',gross,pct(gross),'Sales Revenue − COGS'],
+        ['Less: Operating Expenses',expenses,pct(expenses),'Expenses recorded in the selected period'],
+        ['NET PROFIT / (LOSS)',net,pct(net),'Gross Profit − Operating Expenses'],
+        ['COGS Recorded-Cost Coverage',float(d['cogs_coverage_pct']),None,'Percentage of sale lines with reliable recorded sale-time cost'],
+        ['Sale Lines Missing Cost',int(d['cogs_missing_lines']),None,'These lines can make reported profit incomplete'],
+        ['Sale Lines Using Estimated Cost',int(d['cogs_estimated_lines']),None,'Estimated current average cost; review before relying on profit'],
+        ['Sale Lines Reviewed',int(d['cogs_lines']),None,'Total sale lines included in COGS coverage review']
+    ]
+    headers=['Profit & Loss Statement','Amount (KES)','% of Sales Revenue','Calculation / Management Note']
+    st=core.get_settings(); out,ctype,fn=_export_rows(f"{st.get('business_name',APP_NAME)} · {st.get('business_branch_name','')} · PROFIT AND LOSS · PERIOD {start} TO {end}",headers,rows,fmt); return send_file(handler,out,ctype,fn)
 
 def mpesa_test_connection(u):
     if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
@@ -1702,6 +1850,7 @@ def mpesa_stk_request(u, amount, phone, batch_payload=None, sequence_no=1):
     if core.get_setting('mpesa_enabled','NO')!='YES': raise mpesa.MpesaError('M-Pesa integration is disabled in Administrator Settings.')
     amt=float(amount); phone_n=mpesa.normalize_phone(phone)
     if amt<=0: raise mpesa.MpesaError('Payment amount must be greater than zero.')
+    if abs(amt-round(amt))>0.009: raise mpesa.MpesaError('M-Pesa STK amounts must be whole Kenyan shillings. Use a whole-shilling split or direct Till/Paybill payment.')
     c=core.db.c(); ts=core.now_str(); batch_id=None
     role=role_name(u); branch_id=int((batch_payload or {}).get('branch_id','0') or 0) if role in ('ADMIN','MANAGEMENT') else int(u.get('branch_id') or 0)
     if not branch_id: c.close(); raise mpesa.MpesaError('Select an active branch before requesting an M-Pesa prompt.')
@@ -1785,12 +1934,22 @@ def mpesa_confirm_direct_payment(u, form):
     finally: c.close()
 
 def mpesa_stk_status(checkout,u=None,query=None):
-    c=core.db.c(); r=c.execute('SELECT checkout_request_id,status,mpesa_code,amount,phone,transaction_date,sale_id,branch_id FROM mpesa_stk_requests WHERE checkout_request_id=?',(checkout,)).fetchone(); c.close()
+    c=core.db.c(); r=c.execute('SELECT checkout_request_id,status,mpesa_code,amount,phone,transaction_date,sale_id,branch_id,raw_response FROM mpesa_stk_requests WHERE checkout_request_id=?',(checkout,)).fetchone(); c.close()
     if not r: return {'status':'NOT_FOUND'}
     if u:
         bid=branch_scope_for(u,query)
         if bid is not None and int(r['branch_id'] or 0)!=int(bid): return {'status':'NOT_FOUND'}
-    d=dict(r); d['auto_saved']=bool(d.get('sale_id'))
+    d=dict(r); raw={}
+    try: raw=json.loads(d.pop('raw_response') or '{}')
+    except Exception: d.pop('raw_response',None)
+    d['auto_saved']=bool(d.get('sale_id'))
+    if d['status']=='REVIEW':
+        d['message']='M-Pesa reported a payment, but the amount or phone did not match this prompt. Do not record it as paid; ask Administrator to reconcile it.'
+    elif d['status']=='FAILED':
+        cb=raw.get('Body',{}).get('stkCallback',{})
+        d['message']=cb.get('ResultDesc') or 'Customer did not complete the M-Pesa payment.'
+    elif d['status']=='SUCCESS' and not d['auto_saved']:
+        d['message']='Payment confirmed. Review the receipt code and click SAVE SALE to complete this mixed-payment sale.'
     return d
 
 def finalize_pending_mpesa_batch(batch_id):
@@ -1816,19 +1975,36 @@ def finalize_pending_mpesa_batch(batch_id):
     c=core.db.c(); ts=core.now_str(); c.execute('UPDATE pending_payment_batches SET status="COMPLETED",created_sale_id=?,updated_at=? WHERE id=?',(sale['sale_id'],ts,batch_id)); c.execute('UPDATE mpesa_stk_requests SET sale_id=?,updated_at=? WHERE checkout_request_id IN (SELECT checkout_request_id FROM pending_payment_allocations WHERE batch_id=?)',(sale['sale_id'],ts,batch_id)); c.commit(); c.close(); return sale
 
 def mpesa_receive_stk(payload):
-    d=mpesa.parse_stk_callback(payload); c=core.db.c(); r=c.execute('SELECT id FROM mpesa_stk_requests WHERE checkout_request_id=?',(d['checkout_request_id'],)).fetchone(); status='PENDING'
-    if r:
-        status='SUCCESS' if d['result_code']==0 and d['mpesa_code'] else ('FAILED' if d['result_code']!=0 else 'PENDING')
-        ts=core.now_str(); c.execute('UPDATE mpesa_stk_requests SET status=?,mpesa_code=?,transaction_date=?,raw_response=?,updated_at=? WHERE checkout_request_id=?',(status,d['mpesa_code'],d['transaction_date'],json.dumps(payload,ensure_ascii=False),ts,d['checkout_request_id']))
-        if status=='SUCCESS':
-            a=c.execute('SELECT id,batch_id FROM pending_payment_allocations WHERE checkout_request_id=?',(d['checkout_request_id'],)).fetchone()
-            if a: c.execute('UPDATE pending_payment_allocations SET status="SUCCESS",mpesa_code=?,updated_at=? WHERE id=?',(d['mpesa_code'],ts,a['id']))
-    c.commit(); c.close()
+    d=mpesa.parse_stk_callback(payload)
+    c=core.db.c()
+    try:
+        r=c.execute('SELECT id,amount,phone FROM mpesa_stk_requests WHERE checkout_request_id=?',(d['checkout_request_id'],)).fetchone()
+        status='PENDING'; ts=core.now_str()
+        if r:
+            if d['result_code']!=0:
+                status='FAILED'
+            elif not d['mpesa_code']:
+                status='PENDING'
+            else:
+                amount_ok=d['amount']>0 and abs(float(d['amount'])-float(r['amount']))<0.009
+                phone_ok=True
+                if d['phone']:
+                    try: phone_ok=mpesa.normalize_phone(d['phone'])==mpesa.normalize_phone(r['phone'])
+                    except Exception: phone_ok=False
+                status='SUCCESS' if amount_ok and phone_ok else 'REVIEW'
+            c.execute('UPDATE mpesa_stk_requests SET status=?,mpesa_code=?,transaction_date=?,raw_response=?,updated_at=? WHERE checkout_request_id=?',(status,d['mpesa_code'],d['transaction_date'],json.dumps(payload,ensure_ascii=False),ts,d['checkout_request_id']))
+            if status=='SUCCESS':
+                a=c.execute('SELECT id,batch_id FROM pending_payment_allocations WHERE checkout_request_id=?',(d['checkout_request_id'],)).fetchone()
+                if a: c.execute('UPDATE pending_payment_allocations SET status="SUCCESS",mpesa_code=?,updated_at=? WHERE id=?',(d['mpesa_code'],ts,a['id']))
+        c.commit()
+    except Exception:
+        c.rollback(); raise
+    finally: c.close()
     sale=None
     if status=='SUCCESS':
         c2=core.db.c(); a2=c2.execute('SELECT batch_id FROM pending_payment_allocations WHERE checkout_request_id=?',(d['checkout_request_id'],)).fetchone(); c2.close()
         if a2: sale=finalize_pending_mpesa_batch(a2['batch_id'])
-    d['auto_saved']=bool(sale); d['sale_id']=sale['sale_id'] if sale else None
+    d['auto_saved']=bool(sale); d['sale_id']=sale['sale_id'] if sale else None; d['status']=status
     return d
 
 def mpesa_receive_c2b(payload):
@@ -2288,6 +2464,68 @@ def financial_statement_data(account, start, end, branch_id=None, conn=None):
     return {'rows':rows,'opening':opening,'closing':balance,'money_in':round(total_in,2),'money_out':round(total_out,2)}
 
 
+def ensure_cash_paybill_schema():
+    c=core.db.c()
+    try:
+        c.execute("""CREATE TABLE IF NOT EXISTS cash_paybill_requests(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, request_no TEXT NOT NULL UNIQUE,
+            branch_id INTEGER NOT NULL REFERENCES branches(id), amount REAL NOT NULL CHECK(amount>0),
+            deposit_reference TEXT NOT NULL DEFAULT '', note TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','APPROVED','REJECTED')),
+            requested_by INTEGER NOT NULL REFERENCES users(id), requested_at TEXT NOT NULL,
+            reviewed_by INTEGER REFERENCES users(id), reviewed_at TEXT, review_note TEXT NOT NULL DEFAULT '',
+            transfer_no TEXT UNIQUE, posted_at TEXT)""")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_cash_paybill_req_branch_status ON cash_paybill_requests(branch_id,status,requested_at)")
+        c.commit()
+    finally:
+        c.close()
+
+
+def cash_paybill_transfer_page(u, message=''):
+    ensure_cash_paybill_schema()
+    role=role_name(u)
+    c=core.db.c()
+    try:
+        branches=[dict(x) for x in c.execute("SELECT id,name FROM branches WHERE active=1 ORDER BY name").fetchall()]
+        if role in ('ADMIN','MANAGEMENT'):
+            rows=[dict(x) for x in c.execute("""SELECT r.*,b.name branch_name,ru.full_name requester,au.full_name approver
+                FROM cash_paybill_requests r JOIN branches b ON b.id=r.branch_id
+                JOIN users ru ON ru.id=r.requested_by LEFT JOIN users au ON au.id=r.reviewed_by
+                ORDER BY CASE r.status WHEN 'PENDING' THEN 0 ELSE 1 END,r.id DESC LIMIT 300""").fetchall()]
+        else:
+            bid=int(u.get('branch_id') or 0)
+            if not bid: raise PermissionError('Your account has no assigned branch. Contact Administrator.')
+            rows=[dict(x) for x in c.execute("""SELECT r.*,b.name branch_name,ru.full_name requester,au.full_name approver
+                FROM cash_paybill_requests r JOIN branches b ON b.id=r.branch_id
+                JOIN users ru ON ru.id=r.requested_by LEFT JOIN users au ON au.id=r.reviewed_by
+                WHERE r.branch_id=? ORDER BY r.id DESC LIMIT 200""",(bid,)).fetchall()]
+    finally:
+        c.close()
+    notice=f'<div class="flash error">{esc(message)}</div>' if message else ''
+    if role in ('ADMIN','MANAGEMENT'):
+        branch_field='<div><label>Branch *</label><select name="branch_id" required><option value="">SELECT BRANCH</option>'+''.join(f'<option value="{int(b["id"])}">{esc(b["name"])}</option>' for b in branches)+'</select></div>'
+    else:
+        bid=int(u.get('branch_id') or 0)
+        bname=next((b['name'] for b in branches if int(b['id'])==bid),'Unassigned')
+        branch_field=f'<input type="hidden" name="branch_id" value="{bid}"><div><label>Your assigned branch</label><input value="{esc(bname)}" readonly></div>'
+    form=f'''<section class="card"><div class="section-head"><h2>Request Cash → Paybill Transfer</h2><span class="pill">PENDING APPROVAL</span></div>
+    <p class="muted">Submitting a request does not change balances. Management or Administrator must approve before the system posts the transfer.</p>
+    <form method="post" action="/cash-paybill-transfer" class="form-grid">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="request">
+    {branch_field}<div><label>Amount (KSh) *</label><input type="number" name="amount" min="0.01" step="0.01" required></div>
+    <div><label>Paybill deposit reference / M-Pesa code (optional)</label><input name="deposit_reference" maxlength="100"></div>
+    <div style="grid-column:1/-1"><label>Reason *</label><input name="note" minlength="5" maxlength="250" required></div>
+    <div class="actions"><button class="btn gold">SUBMIT REQUEST</button></div></form></section>'''
+    items=[]
+    for r in rows:
+        action=''
+        if role in ('ADMIN','MANAGEMENT') and r['status']=='PENDING':
+            action=f'''<form method="post" action="/cash-paybill-transfer">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="request_id" value="{r["id"]}"><input name="review_note" placeholder="Review / rejection reason"><button class="btn gold" name="action" value="approve" onclick="return confirm('Approve and post this transfer?')">APPROVE & POST</button><button class="btn danger" name="action" value="reject">REJECT</button></form>'''
+        items.append([esc(r['request_no']),esc(r['requested_at']),esc(r['branch_name']),money(r['amount']),esc(r['requester']),esc(r['deposit_reference'] or '—'),esc(r['note']),esc(r['status']),esc(r['approver'] or '—'),esc(r['reviewed_at'] or '—'),action or esc(r['review_note'] or '—')])
+    table=html_table(['Request','Date','Branch','Amount','Requested By','Deposit Ref.','Reason','Status','Reviewed By','Reviewed At','Action / Note'],items,'No transfer requests yet.')
+    note='<div class="notice">Only Management or Administrator can approve or reject. Approval rechecks branch cash and posts equal Cash OUT and Paybill IN entries once only. Transfers are not income or expenses.</div>'
+    return layout(u,'Cash → Paybill Requests',notice+form+note+f'<section class="card" style="margin-top:14px"><h2>Transfer Requests</h2>{table}</section>','/cash-paybill-transfer','Request and approve branch cash deposits to Paybill')
+
+
 def financials_page(u, query=None, message=''):
     if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
     query=query or {}
@@ -2323,15 +2561,7 @@ def financials_page(u, query=None, message=''):
     <div class="metric-grid"><div class="metric"><div class="muted">OPENING BALANCE</div><div class="v">{money(data["opening"])}</div></div><div class="metric"><div class="muted">TOTAL MONEY IN</div><div class="v">{money(data["money_in"])}</div></div><div class="metric"><div class="muted">TOTAL MONEY OUT</div><div class="v">{money(data["money_out"])}</div></div><div class="metric"><div class="muted">CLOSING BALANCE</div><div class="v">{money(data["closing"])}</div></div></div>
     <div class="actions" style="margin:12px 0"><button class="btn" type="button" onclick="window.print()">PRINT STATEMENT</button><a class="btn" href="{export.format(fmt="pdf")}">DOWNLOAD PDF</a><a class="btn" href="{export.format(fmt="xlsx")}">DOWNLOAD EXCEL</a></div>
     {html_table(["Date & Time","Transaction Code / Reference","Description","Branch","Money In","Money Out","Running Balance"],rows,"No financial transactions found for this period.")}</section>'''
-    transfer_form=f'''<section class="card" style="margin-top:14px"><div class="section-head"><h2>Transfer Cash to Paybill</h2><span class="pill">ADMINISTRATOR ONLY</span></div>
-    <p class="muted">This is an internal transfer: cash decreases and Paybill increases by the same amount. It is not sales income or an expense.</p>
-    <form method="post" action="/financials" class="form-grid">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="transfer">
-    <div><label>Source branch cash</label><select name="branch_id" required><option value="">SELECT BRANCH</option>{''.join(f'<option value="{int(b["id"])}">{esc(b["name"])}</option>' for b in branches)}</select></div>
-    <div><label>Amount deposited (KSh)</label><input type="number" name="amount" min="0.01" step="0.01" required></div>
-    <div><label>M-Pesa deposit transaction code</label><input name="mpesa_code" maxlength="40" required placeholder="e.g. QAB1234567"></div>
-    <div><label>Deposit slip / bank reference (optional)</label><input name="deposit_reference" maxlength="100"></div>
-    <div style="grid-column:1/-1"><label>Note / description</label><input name="note" maxlength="250" required placeholder="Cash deposited to business Paybill"></div>
-    <div class="actions"><button class="btn gold" type="submit">CONFIRM CASH → PAYBILL TRANSFER</button></div></form></section>'''
+    transfer_form=f'''<section class="card" style="margin-top:14px"><h2>Cash → Paybill Approval Workflow</h2><p>All users submit requests on the Cash → Paybill Requests page. Management or Administrator approves before posting.</p><a class="btn gold" href="/cash-paybill-transfer">OPEN TRANSFER REQUESTS</a></section>'''
     opening_form=f'''<section class="card" style="margin-top:14px"><div class="section-head"><h2>Set Initial Financial Balances</h2><span class="pill">ONE-TIME SETUP</span></div>
     <p class="muted">Enter verified balances already held when the system's financial tracking starts. Each account/branch can be initialized only once; the entry is retained in the audit trail.</p>
     <form method="post" action="/financials" class="form-grid">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="opening">
@@ -2377,6 +2607,7 @@ def financials_post(handler,u,form):
         c.execute('BEGIN IMMEDIATE')
         ts=now()
         if action=='transfer':
+            raise PermissionError('Direct transfers are disabled. Submit a request for Management or Administrator approval.')
             branch_id=int(form.get('branch_id','0') or 0)
             amount=round(float(form.get('amount','0') or 0),2)
             code=str(form.get('mpesa_code','')).strip().upper()
@@ -2523,21 +2754,18 @@ def admin_record_change(u, form):
 
 
 
-SUBSCRIPTION_FIRST_MONTH = '2026-12'
-SUBSCRIPTION_PAYBILL = '516600'
-SUBSCRIPTION_ACCOUNT = '319851'
-
 def subscription_billing_state(today=None):
     today = today or dt.datetime.now(dt.timezone(dt.timedelta(hours=3))).date()
     month = today.strftime('%Y-%m')
     previous = (today.replace(day=1) - dt.timedelta(days=1)).strftime('%Y-%m')
-    first = SUBSCRIPTION_FIRST_MONTH
+    first = core.get_setting('subscription_first_month','2026-12')
+    due_day = max(1,min(28,int(float(core.get_setting('subscription_due_day','5')))))
     if month < first:
         return {'due_month':None,'due_date':None,'suspended':False,'upcoming':True,'paid_month':core.get_setting('subscription_paid_month','')}
-    due_month = month if today.day >= 5 else previous
+    due_month = month if today.day >= due_day else previous
     if due_month < first:
         due_month = month
-    due_date = dt.date(int(due_month[:4]),int(due_month[5:]),5)
+    due_date = dt.date(int(due_month[:4]),int(due_month[5:]),due_day)
     paid_month = core.get_setting('subscription_paid_month','')
     paid = bool(paid_month and paid_month >= due_month)
     suspended = today >= due_date and not paid
@@ -2545,8 +2773,12 @@ def subscription_billing_state(today=None):
 
 def subscription_block_page(state):
     amount = core.get_setting('subscription_monthly_amount','')
-    due_month = state.get('due_month') or 'December 2026'
-    return f'''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Subscription overdue · MONTEZ LIQUOR</title><style>{CSS}</style></head><body class="login-page"><main class="login-card"><h1>MONTEZ LIQUOR — ACCESS SUSPENDED</h1><p>Your software subscription payment has not been confirmed. Normal business access is temporarily suspended.</p><section class="card"><h3>Subscription payment details</h3><p><b>Amount:</b> KSh {esc(amount or 'Not configured — contact Administrator')}</p><p><b>Paybill:</b> {SUBSCRIPTION_PAYBILL}</p><p><b>Account:</b> {SUBSCRIPTION_ACCOUNT}</p><p><b>Billing month:</b> {esc(due_month)}</p><p><b>Due date:</b> 5th day of the month</p></section><p>After payment, contact your Administrator to verify the M-PESA transaction and restore access.</p><a class="btn" href="/logout">LOG OUT</a><footer class="app-powered">Powered by SHADYTECHSOLUTIONS</footer></main></body></html>'''
+    paybill = core.get_setting('subscription_paybill','516600')
+    account = core.get_setting('subscription_account','319851')
+    due_day = max(1,min(28,int(float(core.get_setting('subscription_due_day','5')))))
+    due_day_label=f"{due_day}{'st' if due_day==1 else 'nd' if due_day==2 else 'rd' if due_day==3 else 'th'}"
+    due_month = state.get('due_month') or core.get_setting('subscription_first_month','2026-12')
+    return f'''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Subscription overdue · MONTEZ LIQUOR</title><style>{CSS}</style></head><body class="login-page"><main class="login-card"><h1>MONTEZ LIQUOR — ACCESS SUSPENDED</h1><p>Your software subscription payment has not been confirmed. Normal business access is temporarily suspended.</p><section class="card"><h3>Subscription payment details</h3><p><b>Amount:</b> KSh {esc(amount or 'Not configured — contact Administrator')}</p><p><b>Paybill:</b> {esc(paybill)}</p><p><b>Account:</b> {esc(account)}</p><p><b>Billing month:</b> {esc(due_month)}</p><p><b>Due date:</b> {due_day_label} day of the month</p></section><p>After payment, contact your Administrator to verify the M-PESA transaction and restore access.</p><a class="btn" href="/logout">LOG OUT</a><footer class="app-powered">Powered by SHADYTECHSOLUTIONS</footer></main></body></html>'''
 
 def confirm_subscription_payment(u, form):
     if role_name(u) != 'ADMIN':
@@ -2616,6 +2848,7 @@ class Handler(BaseHTTPRequestHandler):
             if billing.get('suspended') and role_name(u)!='ADMIN': return send_html(self,subscription_block_page(billing),402)
             if path=='/api/mpesa/stk-status': return send_json(self,mpesa_stk_status(_qsval(qs,'checkout_request_id'),u,qs))
             if path=='/api/mpesa/live-messages': return send_json(self,mpesa_live_messages_json(u,qs))
+            if path=='/cash-paybill-transfer': return send_html(self,cash_paybill_transfer_page(u))
             if path=='/financials':
                 if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
                 return send_html(self,financials_page(u,qs))
@@ -2664,6 +2897,89 @@ class Handler(BaseHTTPRequestHandler):
             if not check_csrf(self, form):
                 if path == '/customers/credit-payment': return send_json(self, {'error':'Invalid form token. Please refresh the page and try again.'},400)
                 return send_html(self, error_page('Invalid form token. Please refresh and try again.',400),400)
+            if path=='/cash-paybill-transfer':
+                try:
+                    ensure_cash_paybill_schema()
+                    action=str(form.get('action','request')).lower()
+                    role=role_name(u)
+                    c=core.db.c()
+                    try:
+                        c.execute('BEGIN IMMEDIATE')
+                        ts=now()
+                        if action=='request':
+                            submitted_branch=int(form.get('branch_id','0') or 0)
+                            branch_id=int(u.get('branch_id') or 0) if role=='SALES' else submitted_branch
+                            amount=round(float(form.get('amount','0') or 0),2)
+                            deposit_ref=str(form.get('deposit_reference','')).strip().upper()
+                            note=str(form.get('note','')).strip()
+                            if amount<=0 or len(note)<5:
+                                raise ValueError('Enter a positive amount and a reason of at least 5 characters.')
+                            if role=='SALES' and submitted_branch!=branch_id:
+                                raise PermissionError('Salespeople can request transfers only for their assigned branch.')
+                            branch=c.execute('SELECT id,name FROM branches WHERE id=? AND active=1',(branch_id,)).fetchone()
+                            if not branch:
+                                raise ValueError('Select an active registered branch.')
+                            request_no='CPB-REQ-'+dt.datetime.now().strftime('%Y%m%d%H%M%S')+'-'+secrets.token_hex(3).upper()
+                            c.execute('''INSERT INTO cash_paybill_requests(request_no,branch_id,amount,deposit_reference,note,status,requested_by,requested_at)
+                                VALUES(?,?,?,?,?,'PENDING',?,?)''',(request_no,branch_id,amount,deposit_ref,note,u['id'],ts))
+                            core.db.audit(c,u,'CASH_TO_PAYBILL_REQUEST','CASH_PAYBILL_REQUEST',request_no,f'branch={branch["name"]}; amount={amount:.2f}; deposit_reference={deposit_ref}; status=PENDING; balances_unchanged')
+                            c.commit()
+                            add_flash(session_token(self),f'Request {request_no} submitted as PENDING. No balances have changed.','success')
+                        elif action in ('approve','reject'):
+                            if role not in ('ADMIN','MANAGEMENT'):
+                                raise PermissionError('Only Management or Administrator can approve or reject transfer requests.')
+                            request_id=int(form.get('request_id','0') or 0)
+                            row=c.execute('SELECT r.*,b.name branch_name FROM cash_paybill_requests r JOIN branches b ON b.id=r.branch_id WHERE r.id=?',(request_id,)).fetchone()
+                            if not row:
+                                raise ValueError('Transfer request was not found.')
+                            if row['status']!='PENDING':
+                                raise ValueError('This request has already been reviewed and cannot be posted again.')
+                            if int(row['requested_by'])==int(u['id']):
+                                raise PermissionError('You cannot approve your own transfer request.')
+                            review_note=str(form.get('review_note','')).strip()
+                            if action=='reject':
+                                if len(review_note)<5:
+                                    raise ValueError('Enter a rejection reason of at least 5 characters.')
+                                cur=c.execute('UPDATE cash_paybill_requests SET status="REJECTED",reviewed_by=?,reviewed_at=?,review_note=? WHERE id=? AND status="PENDING"',(u['id'],ts,review_note,request_id))
+                                if cur.rowcount!=1:
+                                    raise ValueError('This request has already been reviewed.')
+                                core.db.audit(c,u,'CASH_TO_PAYBILL_REJECT','CASH_PAYBILL_REQUEST',row['request_no'],f'branch={row["branch_name"]}; amount={float(row["amount"]):.2f}; reason={review_note}')
+                                c.commit()
+                                add_flash(session_token(self),f'Request {row["request_no"]} rejected. No balances changed.','success')
+                            else:
+                                amount=round(float(row['amount']),2)
+                                available=financial_statement_data('CASH','1900-01-01 00:00:00','2999-12-31 23:59:59',int(row['branch_id']),c)['closing']
+                                if amount>available:
+                                    raise ValueError(f'Insufficient recorded cash in {row["branch_name"]}. Available: {money(available)}. Request remains pending.')
+                                deposit_ref=str(row['deposit_reference'] or '').strip().upper()
+                                if deposit_ref:
+                                    duplicate=c.execute("""SELECT 1 FROM financial_transfers WHERE UPPER(mpesa_code)=?
+                                        UNION ALL SELECT 1 FROM sale_payments WHERE UPPER(COALESCE(mpesa_code,''))=?
+                                        UNION ALL SELECT 1 FROM credit_payments WHERE UPPER(COALESCE(mpesa_code,''))=?
+                                        UNION ALL SELECT 1 FROM mpesa_stk_requests WHERE UPPER(COALESCE(mpesa_code,''))=?""",(deposit_ref,deposit_ref,deposit_ref,deposit_ref)).fetchone()
+                                    if duplicate:
+                                        raise ValueError('This M-Pesa/deposit reference has already been used. Correct the reference before approval.')
+                                transfer_no='TRF-'+dt.datetime.now().strftime('%Y%m%d%H%M%S')+'-'+secrets.token_hex(3).upper()
+                                transfer_code=deposit_ref or ('INT'+secrets.token_hex(8).upper())
+                                c.execute('''INSERT INTO financial_transfers(transfer_no,branch_id,amount,mpesa_code,deposit_reference,note,created_at,created_by)
+                                    VALUES(?,?,?,?,?,?,?,?)''',(transfer_no,int(row['branch_id']),amount,transfer_code,deposit_ref,('Approved request '+row['request_no']+': '+str(row['note']))[:250],ts,u['id']))
+                                cur=c.execute('''UPDATE cash_paybill_requests SET status='APPROVED',reviewed_by=?,reviewed_at=?,review_note=?,transfer_no=?,posted_at=?
+                                    WHERE id=? AND status='PENDING' ''',(u['id'],ts,review_note,transfer_no,ts,request_id))
+                                if cur.rowcount!=1:
+                                    raise ValueError('This request was already processed; no duplicate transfer was posted.')
+                                core.db.audit(c,u,'CASH_TO_PAYBILL_APPROVE','CASH_PAYBILL_REQUEST',row['request_no'],f'transfer_no={transfer_no}; branch={row["branch_name"]}; amount={amount:.2f}; requested_by={row["requested_by"]}; approved_by={u["id"]}; cash_decreased={amount:.2f}; paybill_increased={amount:.2f}; no_revenue_or_expense_impact')
+                                c.commit()
+                                add_flash(session_token(self),f'Request {row["request_no"]} approved. Cash decreased and Paybill increased by {money(amount)}.','success')
+                        else:
+                            raise ValueError('Unknown transfer request action.')
+                    except Exception:
+                        c.rollback()
+                        raise
+                    finally:
+                        c.close()
+                    return redirect(self,'/cash-paybill-transfer')
+                except Exception as e:
+                    return send_html(self,cash_paybill_transfer_page(u,str(e)),400)
             if path=='/ai':
                 try:
                     require_perm_user(u,'AI_ASSISTANT'); q=form.get('question','').strip()
@@ -2693,7 +3009,7 @@ class Handler(BaseHTTPRequestHandler):
                     return redirect(self,'/stock-transfers?branch_id='+str(form.get('branch_id') or form.get('source_branch_id') or ''))
                 except Exception as e: return send_html(self,stock_transfers_page(u,query={'branch_id':str(form.get('branch_id') or form.get('source_branch_id') or '')},message=str(e)),400)
             if path=='/products':
-                if role_name(u) not in ('ADMIN','SALES') or not allowed(u,'MANAGE_PRODUCTS'): raise PermissionError('Product Registration is disabled for your account. Contact Administrator.')
+                if role_name(u) not in ('ADMIN','MANAGEMENT','SALES') or not allowed(u,'MANAGE_PRODUCTS'): raise PermissionError('Product Registration is disabled for your account. Contact Administrator.')
                 try:
                     action=form.get('action','create')
                     if action=='create':
@@ -2935,7 +3251,47 @@ class Handler(BaseHTTPRequestHandler):
         return send_file(self,build_xlsx(title,headers,rows),'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',f'MONTEZ_LIQUOR_LEDGER_{ym}.xlsx')
     def download_backup(self,u):
         if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
-        c=core.db.c(); c.execute('PRAGMA wal_checkpoint(FULL)'); c.close(); fn=f'MONTEZ_LIQUOR_BACKUP_{dt.datetime.now().strftime("%Y%m%d_%H%M%S")}.db'; path=os.path.join(DATA_DIR,'backups'); os.makedirs(path,exist_ok=True); dest=os.path.join(path,fn); import shutil; shutil.copy2(core.DB_PATH,dest); return send_file(self,open(dest,'rb').read(),'application/octet-stream',fn)
+        backup_dir=os.path.join(DATA_DIR,'backups'); os.makedirs(backup_dir,exist_ok=True)
+        fn=f'MONTEZ_LIQUOR_BACKUP_{dt.datetime.now().strftime("%Y%m%d_%H%M%S_%f")}.db'
+        dest=os.path.join(backup_dir,fn)
+        src=None; target=None
+        try:
+            # SQLite's backup API includes committed WAL pages in a consistent snapshot.
+            src=sqlite3.connect(core.DB_PATH,timeout=30)
+            target=sqlite3.connect(dest,timeout=30)
+            src.backup(target,pages=256,sleep=0.05)
+            integrity=target.execute('PRAGMA integrity_check').fetchone()
+            target.commit()
+            if not integrity or integrity[0]!='ok':
+                raise RuntimeError('Backup integrity check failed; no backup was downloaded.')
+        except Exception:
+            try:
+                if target: target.close()
+            except Exception: pass
+            try:
+                if src: src.close()
+            except Exception: pass
+            try: os.remove(dest)
+            except OSError: pass
+            raise
+        finally:
+            try:
+                if target: target.close()
+            except Exception: pass
+            try:
+                if src: src.close()
+            except Exception: pass
+        with open(dest,'rb') as f: data=f.read()
+        if not data.startswith(b'SQLite format 3\x00'):
+            try: os.remove(dest)
+            except OSError: pass
+            raise RuntimeError('The generated backup is not a valid SQLite database.')
+        c=core.db.c()
+        try:
+            core.db.audit(c,u,'DATABASE_BACKUP','DATABASE',fn,f'Created consistent SQLite snapshot; bytes={len(data)}')
+            c.commit()
+        finally: c.close()
+        return send_file(self,data,'application/vnd.sqlite3',fn)
 
 
 def change_password_page(u,message=''):
@@ -3040,7 +3396,7 @@ def do_POST(self):
             try: save_expense(u,form); add_flash(session_token(self),'Expense saved successfully.','success'); return redirect(self,'/expenses')
             except Exception as e: return send_html(self,expense_page(u,str(e)),400)
         if path=='/products':
-            if role_name(u) not in ('ADMIN','SALES') or not allowed(u,'MANAGE_PRODUCTS'): raise PermissionError('Product Registration is disabled for your account. Contact Administrator.')
+            if role_name(u) not in ('ADMIN','MANAGEMENT','SALES') or not allowed(u,'MANAGE_PRODUCTS'): raise PermissionError('Product Registration is disabled for your account. Contact Administrator.')
             try:
                 action=form.get('action','create')
                 if action=='create': save_product(u,form); msg='Product saved successfully. Product registered successfully.'
@@ -3064,6 +3420,43 @@ def do_POST(self):
                 else: raise ValueError('Unknown user action.')
                 add_flash(session_token(self),msg,'success'); return redirect(self,'/users')
             except Exception as e: return send_html(self,users_page(u,str(e)),400)
+        if path=='/branches':
+            if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
+            c=core.db.c()
+            try:
+                action=form.get('action','create'); ts=now()
+                if action=='create':
+                    name=form.get('name','').strip()
+                    code=form.get('code','').strip().upper() or None
+                    location=form.get('location','').strip()
+                    phone=form.get('phone','').strip()
+                    if not name: raise ValueError('Branch name is required.')
+                    if c.execute('SELECT 1 FROM branches WHERE lower(name)=lower(?)',(name,)).fetchone():
+                        raise ValueError('A branch with this name already exists.')
+                    if code and c.execute('SELECT 1 FROM branches WHERE upper(code)=upper(?)',(code,)).fetchone():
+                        raise ValueError('A branch with this code already exists.')
+                    c.execute('INSERT INTO branches(name,code,location,phone,active,created_at,updated_at) VALUES(?,?,?,?,1,?,?)',(name,code,location,phone,ts,ts))
+                    bid=c.execute('SELECT id FROM branches WHERE name=?',(name,)).fetchone()['id']
+                    for pr in c.execute('SELECT id,avg_cost,sell_price,wholesale_price,reorder_level FROM products').fetchall():
+                        c.execute('INSERT OR IGNORE INTO branch_stock(branch_id,product_id,qty,avg_cost,buy_price,sell_price,wholesale_price,reorder_level,updated_at) VALUES(?,?,0,?,?,?,?,?,?)',(bid,pr['id'],float(pr['avg_cost'] or 0),float(pr['avg_cost'] or 0),float(pr['sell_price'] or 0),float(pr['wholesale_price'] or pr['sell_price'] or 0),float(pr['reorder_level'] or 0),ts))
+                    core.db.audit(c,u,'CREATE','BRANCH',bid,f'{name} code={code or ""}')
+                    c.commit(); msg='Branch registered successfully.'
+                elif action=='toggle':
+                    bid=int(form.get('branch_id','0') or 0); active=1 if form.get('active')=='1' else 0
+                    br=c.execute('SELECT * FROM branches WHERE id=?',(bid,)).fetchone()
+                    if not br: raise ValueError('Branch not found.')
+                    if not active and c.execute('SELECT COUNT(*) n FROM users WHERE branch_id=? AND active=1 AND access_role="SALES"',(bid,)).fetchone()['n']:
+                        raise ValueError('Reassign or disable all active Sales Persons before deactivating this branch.')
+                    c.execute('UPDATE branches SET active=?,updated_at=? WHERE id=?',(active,ts,bid))
+                    core.db.audit(c,u,'UPDATE','BRANCH',bid,f'active={active}')
+                    c.commit(); msg='Branch status updated.'
+                else:
+                    raise ValueError('Unknown branch action.')
+                add_flash(session_token(self),msg,'success'); return redirect(self,'/branches')
+            except Exception as e:
+                c.rollback(); return send_html(self,branches_page(u,str(e)),400)
+            finally:
+                c.close()
         if path=='/subscription/confirm':
             try:
                 confirm_subscription_payment(u,form)
@@ -3177,3 +3570,5 @@ if __name__=='__main__':
     print('='*60); print(APP_NAME); print('SERVER IS RUNNING'); print('='*60)
     print(f'Laptop: http://127.0.0.1:{PORT}'); print(f'Phone (same Wi-Fi): http://{ip_address()}:{PORT}'); print('='*60)
     ThreadingHTTPServer((HOST,PORT),Handler).serve_forever()
+
+# cash-paybill approval workflow changes are staged separately.
