@@ -1983,7 +1983,10 @@ def admin_record_change(u, form):
             if not row: raise ValueError('Purchase record not found.')
             prod=c.execute('SELECT * FROM products WHERE id=?',(row['product_id'],)).fetchone()
             if not prod: raise ValueError('The product linked to this purchase no longer exists.')
-            old_qty=float(row['qty']); old_cost=float(row['unit_cost']); current_qty=float(prod['stock_qty']); current_cost=float(prod['avg_cost'])
+            branch_id=int(row['branch_id'] or 0)
+            bs=c.execute('SELECT * FROM branch_stock WHERE branch_id=? AND product_id=?',(branch_id,row['product_id'])).fetchone()
+            if not bs: raise ValueError('The branch stock record for this purchase is missing; reconcile the branch stock before editing.')
+            old_qty=float(row['qty']); old_cost=float(row['unit_cost']); current_qty=float(bs['qty']); current_cost=float(bs['avg_cost'])
             if action=='edit':
                 supplier=form.get('supplier','').strip(); new_qty=int(form.get('qty','0') or 0); new_cost=round(float(form.get('unit_cost','0') or 0),2); method=form.get('payment_method','').strip(); ref=form.get('reference','').strip()
                 if not supplier or new_qty<=0 or new_cost<0 or method not in ('Cash','M-Pesa','Credit'): raise ValueError('Enter a valid supplier, quantity, unit cost and payment method.')
@@ -1994,16 +1997,16 @@ def admin_record_change(u, form):
                 inventory_value=max(0.0,current_qty*current_cost-old_total+new_total)
                 new_avg=inventory_value/new_stock if new_stock>0 else 0.0
                 before=f'supplier={row["supplier"]}; qty={old_qty:g}; unit_cost={old_cost:.2f}; total={row["total"]:.2f}; method={row["payment_method"]}; reference={row["reference"]}'
-                c.execute('UPDATE purchases SET supplier=?,payment_method=?,total=?,reference=? WHERE id=?',(supplier,method,new_total,ref,rid)); c.execute('UPDATE purchase_lines SET qty=?,unit_cost=?,total=? WHERE id=?',(new_qty,new_cost,new_total,row['line_id'])); c.execute('UPDATE products SET stock_qty=?,avg_cost=?,updated_at=? WHERE id=?',(new_stock,new_avg,ts,row['product_id']))
-                c.execute('UPDATE stock_movements SET qty=?,unit_cost=?,after_qty=before_qty+?,reference=? WHERE movement_type="PURCHASE" AND reference=?',(new_qty,new_cost,new_qty,row['purchase_no'],row['purchase_no']))
+                c.execute('UPDATE purchases SET supplier=?,payment_method=?,total=?,reference=? WHERE id=?',(supplier,method,new_total,ref,rid)); c.execute('UPDATE purchase_lines SET qty=?,unit_cost=?,total=? WHERE id=?',(new_qty,new_cost,new_total,row['line_id'])); c.execute('UPDATE branch_stock SET qty=?,avg_cost=?,buy_price=?,updated_at=? WHERE branch_id=? AND product_id=?',(new_stock,new_avg,new_cost,ts,branch_id,row['product_id']))
+                c.execute('UPDATE stock_movements SET qty=?,unit_cost=?,after_qty=before_qty+?,reference=? WHERE movement_type="PURCHASE" AND reference=? AND product_id=? AND branch_id=?',(new_qty,new_cost,new_qty,row['purchase_no'],row['purchase_no'],row['product_id'],branch_id))
                 after=f'supplier={supplier}; qty={new_qty}; unit_cost={new_cost:.2f}; total={new_total:.2f}; method={method}; reference={ref}; resulting_stock={new_stock:g}; avg_cost={new_avg:.2f}'
                 core.db.audit(c,u,'ADMIN_EDIT','PURCHASE',rid,f'reason={reason}; before=[{before}]; after=[{after}]; historical sale COGS snapshots unchanged')
             elif action=='delete':
                 # Reverse only the units that are still physically in stock; sold units stay reflected in historical sales.
                 qty_reversed=min(current_qty,old_qty)
                 new_stock=max(0.0,current_qty-qty_reversed); inventory_value=max(0.0,current_qty*current_cost-qty_reversed*old_cost); new_avg=inventory_value/new_stock if new_stock>0 else 0.0
-                c.execute('UPDATE products SET stock_qty=?,avg_cost=?,updated_at=? WHERE id=?',(new_stock,new_avg,ts,row['product_id']))
-                c.execute('DELETE FROM stock_movements WHERE movement_type="PURCHASE" AND reference=?',(row['purchase_no'],)); c.execute('DELETE FROM purchases WHERE id=?',(rid,))
+                c.execute('UPDATE branch_stock SET qty=?,avg_cost=?,updated_at=? WHERE branch_id=? AND product_id=?',(new_stock,new_avg,ts,branch_id,row['product_id']))
+                c.execute('DELETE FROM stock_movements WHERE movement_type="PURCHASE" AND reference=? AND product_id=? AND branch_id=?',(row['purchase_no'],row['product_id'],branch_id)); c.execute('DELETE FROM purchases WHERE id=?',(rid,))
                 core.db.audit(c,u,'ADMIN_DELETE','PURCHASE',rid,f'purchase_no={row["purchase_no"]}; qty={old_qty:g}; unit_cost={old_cost:.2f}; units_reversed_from_current_stock={qty_reversed:g}; stock_after={new_stock:g}; reason={reason}; historical sale COGS snapshots unchanged')
             else: raise ValueError('Unknown purchase action.')
         elif entity=='sale':
@@ -2018,10 +2021,13 @@ def admin_record_change(u, form):
             elif action=='delete':
                 lines=c.execute('SELECT product_id,qty FROM sale_lines WHERE sale_id=?',(rid,)).fetchall()
                 for line in lines:
-                    prod=c.execute('SELECT stock_qty FROM products WHERE id=?',(line['product_id'],)).fetchone()
-                    if prod:
-                        before=float(prod['stock_qty']); after=before+float(line['qty']); c.execute('UPDATE products SET stock_qty=?,updated_at=? WHERE id=?',(after,ts,line['product_id']))
-                        c.execute('INSERT INTO stock_movements(movement_time,user_id,product_id,movement_type,qty,before_qty,after_qty,unit_cost,reference) VALUES(?,?,?,?,?,?,?,?,?)',(ts,u['id'],line['product_id'],'ADMIN_SALE_REVERSAL',float(line['qty']),before,after,0.0,'DELETE '+row['receipt_no']))
+                    branch_id=int(row['branch_id'] or 0)
+                    bs=c.execute('SELECT * FROM branch_stock WHERE branch_id=? AND product_id=?',(branch_id,line['product_id'])).fetchone()
+                    if bs:
+                        before=float(bs['qty']); after=before+float(line['qty']); c.execute('UPDATE branch_stock SET qty=?,updated_at=? WHERE branch_id=? AND product_id=?',(after,ts,branch_id,line['product_id']))
+                        c.execute('INSERT INTO stock_movements(movement_time,user_id,product_id,movement_type,qty,before_qty,after_qty,unit_cost,reference,branch_id) VALUES(?,?,?,?,?,?,?,?,?,?)',(ts,u['id'],line['product_id'],'ADMIN_SALE_REVERSAL',float(line['qty']),before,after,float(bs['avg_cost'] or 0),'DELETE '+row['receipt_no'],branch_id))
+                    else:
+                        raise ValueError('The branch stock record for this sale is missing; reconcile the branch stock before deleting the sale.')
                 c.execute('UPDATE mpesa_stk_requests SET sale_id=NULL WHERE sale_id=?',(rid,)); c.execute('DELETE FROM credit_payments WHERE credit_id IN (SELECT id FROM credit_accounts WHERE sale_id=?)',(rid,)); c.execute('DELETE FROM credit_accounts WHERE sale_id=?',(rid,)); c.execute('DELETE FROM sale_payments WHERE sale_id=?',(rid,)); c.execute('DELETE FROM sale_lines WHERE sale_id=?',(rid,)); c.execute('DELETE FROM sales WHERE id=?',(rid,)); core.db.audit(c,u,'ADMIN_DELETE','SALE',rid,f'receipt={row["receipt_no"]}; amount={row["total"]:.2f}; reason={reason}; sold units returned to stock; payment/credit allocations removed')
             else: raise ValueError('Unknown sale action.')
         else: raise ValueError('Unsupported record type.')
