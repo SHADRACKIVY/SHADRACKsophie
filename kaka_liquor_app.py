@@ -298,7 +298,7 @@ def login_page(message=''):
 
 def layout(u, title, content, active='', subtitle='Business control center'):
     settings=core.get_settings(); name=settings.get('business_name',APP_NAME); business_subtitle=settings.get('business_subtitle','Wines and Spirit'); branch=settings.get('business_branch_name',''); role=role_name(u); dashboard_enabled=settings.get('dashboard_enabled','YES')=='YES'
-    nav=([(setting_label('nav_dashboard','Dashboard'),'/')] if dashboard_enabled and allowed(u,'VIEW_DASHBOARD') else [])+[(setting_label('nav_sales','Sales / POS'),'/sales')]+([(setting_label('nav_sales_dashboard','Sales Dashboard'),'/sales-dashboard')] if dashboard_enabled and allowed(u,'VIEW_DASHBOARD') else [])+[(setting_label('nav_purchases','Purchases'),'/purchases'),(setting_label('nav_expenses','Expenses'),'/expenses'),(setting_label('nav_customers','Customers / Credit'),'/customers'),(setting_label('nav_reports','Reports'),'/reports'),(setting_label('nav_stock_report','Stock Report'),'/stock-report'),(setting_label('nav_reorder_report','Reorder Report'),'/reorder-report'),(setting_label('nav_live','Live Monitoring'),'/live'),(setting_label('nav_products','Product Registration'),'/products'),('MONTEZ LIQUOR AI Assistant','/ai')]
+    nav=([(setting_label('nav_dashboard','Dashboard'),'/')] if dashboard_enabled and allowed(u,'VIEW_DASHBOARD') else [])+[(setting_label('nav_sales','Sales / POS'),'/sales')]+([(setting_label('nav_sales_dashboard','Sales Dashboard'),'/sales-dashboard')] if dashboard_enabled and allowed(u,'VIEW_DASHBOARD') else [])+[(setting_label('nav_purchases','Purchases'),'/purchases'),(setting_label('nav_expenses','Expenses'),'/expenses'),(setting_label('nav_customers','Customers / Credit'),'/customers'),(setting_label('nav_reports','Reports'),'/reports'),(setting_label('nav_stock_report','Stock Report'),'/stock-report'),('Stock Transfers / Stock Count','/stock-transfers'),(setting_label('nav_reorder_report','Reorder Report'),'/reorder-report'),(setting_label('nav_live','Live Monitoring'),'/live'),(setting_label('nav_products','Product Registration'),'/products'),('MONTEZ LIQUOR AI Assistant','/ai')]
     if role=='ADMIN':
         nav += [('Branch Registration','/branches'),('Branch Performance','/branch-performance'),(setting_label('nav_users','User Management'),'/users'),(setting_label('nav_settings','Settings'),'/settings'),('M-Pesa Monitor','/mpesa/monitor'),('Payment Recovery','/mpesa/recovery'),(setting_label('nav_ledger','Ledger & P&L'),'/ledger'),(setting_label('nav_profit_loss','Profit & Loss'),'/profit-loss'),(setting_label('nav_expense_report','Expense Report'),'/expense-report'),(setting_label('nav_backup','Backup'),'/backup'),(setting_label('nav_audit','Audit Log'),'/audit')]
     else:
@@ -2326,13 +2326,13 @@ class Handler(BaseHTTPRequestHandler):
                 '/':home_page,'/sales':sales_page,'/sales-dashboard':sales_dashboard,
                 '/purchases':purchase_page,'/expenses':expense_page,'/expense-report':expense_report_page,
                 '/customers':customers_page,'/reports':reports_page,'/stock-report':stock_report_page,
-                '/reorder-report':reorder_report_page,'/live':live_page,'/products':products_page,
+                '/reorder-report':reorder_report_page,'/stock-transfers':stock_transfers_page,'/live':live_page,'/products':products_page,
                 '/users':users_page,'/branches':branches_page,'/branch-performance':branch_performance_page,'/settings':settings_page,'/ledger':ledger_page,
                 '/profit-loss':pl_page,'/backup':backup_page,'/audit':audit_page,'/ai':ai_page}
             if path=='/change-password': return send_html(self,change_password_page(u))
             if path in routes:
                 if path=='/': return send_html(self,home_page(u,qs))
-                if path in ('/reports','/stock-report','/branch-performance','/products','/purchases','/expenses'):
+                if path in ('/reports','/stock-report','/branch-performance','/products','/purchases','/expenses','/stock-transfers'):
                     return send_html(self, routes[path](u, query=qs))
                 if path in ('/expense-report','/ledger','/profit-loss','/reorder-report','/live'):
                     return send_html(self, routes[path](u, qs))
@@ -2375,6 +2375,14 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/expenses':
                 try: save_expense(u,form); add_flash(session_token(self),'Expense saved successfully.','success'); return redirect(self,'/expenses')
                 except Exception as e: return send_html(self,expense_page(u,str(e)),400)
+            if path=='/stock-transfers':
+                try:
+                    action=form.get('action','request')
+                    if action=='count':
+                        result=stock_count_adjustment(u,form); add_flash(session_token(self),f'Stock count saved for {result["product"]}. System {result["before"]:g}, physical {result["physical"]:g}, variance {result["variance"]:+g}.','success')
+                    else: add_flash(session_token(self),stock_transfer_action(u,form),'success')
+                    return redirect(self,'/stock-transfers')
+                except Exception as e: return send_html(self,stock_transfers_page(u,message=str(e)),400)
             if path=='/products':
                 if role_name(u) not in ('ADMIN','SALES') or not allowed(u,'MANAGE_PRODUCTS'): raise PermissionError('Product Registration is disabled for your account. Contact Administrator.')
                 try:
