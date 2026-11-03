@@ -36,11 +36,11 @@ jobs:
               raise AssertionError("Invalid M-Pesa recovery window was accepted.")
           except ValueError:
               pass
-          manager_id=save_user(admin,{"username":"manager","full_name":"Manager","password":"manager-test-pass","role":"MANAGEMENT","branch_id":""})
-          sales_id=save_user(admin,{"username":"sales","full_name":"Sales","password":"sales-test-pass","role":"SALES","branch_id":str(bid)})
+          manager_id=save_user(admin,{"username":"ci_role_manager","full_name":"CI Role Manager","password":"manager-test-pass","role":"MANAGEMENT","branch_id":""})
+          sales_id=save_user(admin,{"username":"ci_role_sales","full_name":"CI Role Sales","password":"sales-test-pass","role":"SALES","branch_id":str(bid)})
           core.update_permissions(admin,{"roles":{"MANAGEMENT":{"VIEW_STOCK":True,"VIEW_REPORTS":False,"MANAGE_SETTINGS":True},"SALES":{"CREATE_SALE":True,"MANAGE_USERS":True}},"users":{}})
-          manager={"id":manager_id,"username":"manager","full_name":"Manager","access_role":"MANAGEMENT","role":"SALES","branch_id":None}
-          sales={"id":sales_id,"username":"sales","full_name":"Sales","access_role":"SALES","role":"SALES","branch_id":bid}
+          manager={"id":manager_id,"username":"ci_role_manager","full_name":"CI Role Manager","access_role":"MANAGEMENT","role":"SALES","branch_id":None}
+          sales={"id":sales_id,"username":"ci_role_sales","full_name":"CI Role Sales","access_role":"SALES","role":"SALES","branch_id":bid}
           assert core.effective_permissions(manager)["VIEW_STOCK"] is True
           assert core.effective_permissions(manager)["VIEW_REPORTS"] is False
           assert core.effective_permissions(manager)["MANAGE_SETTINGS"] is False
@@ -51,7 +51,7 @@ jobs:
           c=core.db.c()
           c.execute("INSERT INTO user_permissions(user_id,key,enabled) VALUES(?,?,0)",(sales_id,"VIEW_STOCK"))
           c.commit(); c.close()
-          admin_edit_user(admin,{"user_id":str(sales_id),"full_name":"Sales","role":"MANAGEMENT","active":"1","branch_id":str(bid)})
+          admin_edit_user(admin,{"user_id":str(sales_id),"full_name":"CI Role Sales","role":"MANAGEMENT","active":"1","branch_id":str(bid)})
           c=core.db.c()
           row=c.execute("SELECT access_role,branch_id,home_branch_id FROM users WHERE id=?",(sales_id,)).fetchone()
           overrides=c.execute("SELECT COUNT(*) n FROM user_permissions WHERE user_id=?",(sales_id,)).fetchone()["n"]
