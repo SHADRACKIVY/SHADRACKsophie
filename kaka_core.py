@@ -820,7 +820,7 @@ def xlsx_bytes(title, headers, rows):
     for row in rows:
         label=str(row[0] if row else '').upper()
         summary=any(k in label for k in ('NET PROFIT','GROSS PROFIT','TOTAL','CLOSING BALANCE','OPENING BALANCE'))
-        all_rows.append((row,7 if summary else 0,22 if summary else 20))
+        all_rows.append((row,7 if summary else 0,28 if summary else 28))
     if st.get('report_footer','').strip():
         all_rows.append(([st['report_footer'].strip()],2,24))
     sheet_rows=[]
@@ -834,7 +834,7 @@ def xlsx_bytes(title, headers, rows):
                 if '%' in h or 'percentage' in h or 'share' in h: style=5
                 elif any(k in h for k in ('amount','revenue','price','cost','value','total','debit','credit','balance','profit','expense','sales')) and not any(k in h for k in ('count','units','qty','quantity','number','transactions')): style=4
                 else: style=6
-                if row_style==7: style=7
+                if row_style==7 and not ('%' in h or 'percentage' in h or 'share' in h): style=7
             cells.append(cell(f'{xlcol(cno)}{rno}',value,style))
         sheet_rows.append(f'<row r="{rno}" ht="{height}" customHeight="1">{"".join(cells)}</row>')
     last_row=max(1,len(all_rows)); last_col=xlcol(col_count)
@@ -869,14 +869,14 @@ def xlsx_bytes(title, headers, rows):
       <borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color rgb="FFDCE5DE"/></left><right style="thin"><color rgb="FFDCE5DE"/></right><top style="thin"><color rgb="FFDCE5DE"/></top><bottom style="thin"><color rgb="FFDCE5DE"/></bottom><diagonal/></border></borders>
       <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
       <cellXfs count="8">
-        <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1"/>
+        <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1"><alignment vertical="center" wrapText="1"/></xf>
         <xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFill="1" applyFont="1"><alignment vertical="center"/></xf>
         <xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"><alignment vertical="center"/></xf>
         <xf numFmtId="0" fontId="3" fillId="2" borderId="1" xfId="0" applyFill="1" applyFont="1" applyBorder="1"><alignment vertical="center" wrapText="1"/></xf>
         <xf numFmtId="164" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1"><alignment horizontal="right"/></xf>
         <xf numFmtId="165" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1"><alignment horizontal="right"/></xf>
         <xf numFmtId="4" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1"><alignment horizontal="right"/></xf>
-        <xf numFmtId="164" fontId="3" fillId="4" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1"><alignment horizontal="right"/></xf>
+        <xf numFmtId="164" fontId="3" fillId="4" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1"><alignment horizontal="right" vertical="center" wrapText="1"/></xf>
       </cellXfs>
       <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
     </styleSheet>'''
