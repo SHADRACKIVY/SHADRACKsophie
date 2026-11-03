@@ -1473,19 +1473,18 @@ def export_report_v2(handler, u, qs):
     if not start or not end: raise ValueError('Report period is missing.')
     if start>end: raise ValueError('From date/time must be before To date/time.')
     if kind=='report':
-        require_perm_user(u,'VIEW_REPORTS'); rows=core.report_data(start,end)
+        require_perm_user(u,'VIEW_REPORTS'); bid=branch_scope_for(u,qs); rows=core.report_data(start,end,bid)
         headers=['Receipt','Date/Time','Customer','Units','Total','Cash','M-Pesa','Attended By']
         data=[[r['receipt_no'],r['sold_at'],r['customer'],r['units'],r['total'],r['cash'],r['mpesa'],r['attended_by']] for r in rows]
         title=f"{core.get_setting('business_name',APP_NAME)} · {core.get_setting('business_branch_name','')} · SALES REPORT"
     elif kind=='stock':
-        require_perm_user(u,'VIEW_STOCK'); bid=int(qs.get('branch_id',['0'])[0] or 0) or None
-        if role_name(u) not in ('ADMIN','MANAGEMENT'): bid=int(u.get('branch_id') or 0)
+        require_perm_user(u,'VIEW_STOCK'); bid=branch_scope_for(u,qs)
         rows=core.stock_report(start,end,bid)
         headers=['Product Name','Category','Opening Stock','Purchased','Sold','Adjustments','Closing Stock','Retail Units','Wholesale Units','Retail Revenue','Wholesale Revenue','Retail Price','Wholesale Price','Avg Cost','Closing Value','Reorder','Status']
         data=[[r['name'],r['category'],r['opening'],r['purchased'],r['sold'],r['adjustments'],r['closing'],r['retail_units'],r['wholesale_units'],r['retail_revenue'],r['wholesale_revenue'],r['retail_price'],r['wholesale_price'],r['avg_cost'],r['closing']*r['avg_cost'],r['reorder_level'],r['status']] for r in rows]
         title=f"{core.get_setting('business_name',APP_NAME)} · BRANCH STOCK REPORT"
     elif kind=='reorder':
-        require_perm_user(u,'VIEW_STOCK'); bid=None if role_name(u) in ('ADMIN','MANAGEMENT') else int(u.get('branch_id') or 0); rows=[r for r in core.stock_report(start,end,bid) if r['status'] in ('LOW STOCK','OUT OF STOCK')]
+        require_perm_user(u,'VIEW_STOCK'); bid=branch_scope_for(u,qs); rows=[r for r in core.stock_report(start,end,bid) if r['status'] in ('LOW STOCK','OUT OF STOCK')]
         headers=['Product Name','Category','Current Stock','Reorder Level','Status','Avg Cost','Stock Value']
         data=[[r['name'],r['category'],r['stock'],r['reorder_level'],r['status'],r['avg_cost'],r['stock_value']] for r in rows]
         title='MONTEZ LIQUOR REORDER REPORT'
@@ -1500,12 +1499,12 @@ def export_report_v2(handler, u, qs):
             for i,r in enumerate(rows,1): data.append([label,award_for_rank(i,r['revenue'],total),i,(r[namekey]+(' · '+r['branch_name'] if namekey=='full_name' else '')),r['transactions'],r['units'],r['revenue'],100*float(r['revenue'] or 0)/total if total else 0])
         title='BRANCH AND EMPLOYEE PERFORMANCE REPORT'
     elif kind=='expenses':
-        require_perm_user(u,'VIEW_REPORTS'); rows=core.expense_report_data(start,end)
+        require_perm_user(u,'VIEW_REPORTS'); bid=branch_scope_for(u,qs); rows=core.expense_report_data(start,end,bid)
         headers=['Date/Time','Expense','Category','Description','Amount','Payment','Reference','Recorded By']
         data=[[r['expense_date'],r['expense_no'],r['category'],r['description'],r['amount'],r['payment_method'],r['reference'] or '',r['attended_by']] for r in rows]
         title='MONTEZ LIQUOR EXPENSE REPORT'
     elif kind=='purchases':
-        require_perm_user(u,'VIEW_REPORTS'); rows=core.purchase_report_data(start,end)
+        require_perm_user(u,'VIEW_REPORTS'); bid=branch_scope_for(u,qs); rows=core.purchase_report_data(start,end,bid)
         headers=['Date/Time','Purchase','Supplier','Payment','Total','Units','Reference','Recorded By']
         data=[[r['purchased_at'],r['purchase_no'],r['supplier'],r['payment_method'],r['total'],r['units'],r['reference'] or '',r['attended_by']] for r in rows]
         title='MONTEZ LIQUOR PURCHASE REPORT'
