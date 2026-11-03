@@ -230,7 +230,7 @@ class DB:
             ('AI_ASSISTANT','KAKA LIQUOR WINES AND SPIRIT AI Assistant','Ask business questions and get explanations from system data.')
         ]
         sales_defaults={'VIEW_DASHBOARD','CREATE_SALE','CREATE_PURCHASE','RECORD_EXPENSE','MANAGE_CUSTOMERS','VIEW_REPORTS','VIEW_STOCK','LIVE_MONITORING','PRINT_EXPORT','CREDIT_SALES','CREDIT_REPAYMENTS','MANAGE_PRODUCTS','AI_ASSISTANT'}
-        management_defaults={'VIEW_DASHBOARD','VIEW_REPORTS','VIEW_STOCK','VIEW_LEDGER','PRINT_EXPORT','AI_ASSISTANT'}
+        management_defaults={'VIEW_DASHBOARD','VIEW_REPORTS','VIEW_STOCK','VIEW_LEDGER','PRINT_EXPORT','AI_ASSISTANT','MANAGE_PRODUCTS'}
         for key,label,desc in permission_defs:
             c.execute('INSERT OR IGNORE INTO permissions(key,label,description) VALUES(?,?,?)',(key,label,desc))
             c.execute('INSERT OR IGNORE INTO role_permissions(role,key,enabled) VALUES(?,?,?)',('ADMIN',key,1))
@@ -308,6 +308,9 @@ class DB:
         if not c.execute("SELECT 1 FROM settings WHERE key='sales_product_registration_v1'").fetchone():
             c.execute("UPDATE role_permissions SET enabled=1 WHERE role='SALES' AND key='MANAGE_PRODUCTS'")
             c.execute("INSERT INTO settings(key,value,updated_at,updated_by) VALUES('sales_product_registration_v1','1',?,NULL)",(t,))
+        if not c.execute("SELECT 1 FROM settings WHERE key='management_product_registration_v1'").fetchone():
+            c.execute("UPDATE role_permissions SET enabled=1 WHERE role='MANAGEMENT' AND key='MANAGE_PRODUCTS'")
+            c.execute("INSERT INTO settings(key,value,updated_at,updated_by) VALUES('management_product_registration_v1','1',?,NULL)",(t,))
         c.commit(); c.close()
         c=self.c()
         try:
@@ -461,7 +464,7 @@ def _permission_enabled(value):
     return str(value or '').strip().lower() in ('1','true','yes','on','enabled')
 
 ADMIN_ONLY_PERMISSION_KEYS={'MANAGE_USERS','MANAGE_SETTINGS','BACKUP_DATA','VIEW_AUDIT'}
-MANAGEMENT_UNSUPPORTED_PERMISSION_KEYS={'MANAGE_PRODUCTS'}
+MANAGEMENT_UNSUPPORTED_PERMISSION_KEYS=set()
 
 def update_permissions(admin,data):
     if role_name(admin)!='ADMIN': raise PermissionError('Administrator permission required.')
@@ -473,7 +476,7 @@ def update_permissions(admin,data):
             for row in c.execute('SELECT key FROM permissions').fetchall():
                 key=row['key']
                 enabled=_permission_enabled(mapping.get(key,False))
-                if key in ADMIN_ONLY_PERMISSION_KEYS or (role=='MANAGEMENT' and key in MANAGEMENT_UNSUPPORTED_PERMISSION_KEYS):
+                if key in ADMIN_ONLY_PERMISSION_KEYS:
                     enabled=False
                 c.execute('INSERT INTO role_permissions(role,key,enabled) VALUES(?,?,?) ON CONFLICT(role,key) DO UPDATE SET enabled=excluded.enabled',(role,key,1 if enabled else 0))
         for uid,mapping in ((data.get('users') or {}) or {}).items():
@@ -483,7 +486,7 @@ def update_permissions(admin,data):
             if not user or user['access_role']=='ADMIN': continue
             for key,val in (mapping or {}).items():
                 if not c.execute('SELECT 1 FROM permissions WHERE key=?',(key,)).fetchone(): continue
-                if key in ADMIN_ONLY_PERMISSION_KEYS or (user['access_role']=='MANAGEMENT' and key in MANAGEMENT_UNSUPPORTED_PERMISSION_KEYS):
+                if key in ADMIN_ONLY_PERMISSION_KEYS:
                     enabled=False
                 else:
                     enabled=_permission_enabled(val)
