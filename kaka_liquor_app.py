@@ -147,7 +147,54 @@ SCANNER_MODAL = ''
 
 SCANNER_JS = r"""
 window.filterSelectOptions=function(input,selectId){var q=typeof input==='string'?document.getElementById(input):input,sel=document.getElementById(selectId);if(!q||!sel)return;var term=(q.value||'').trim().toLowerCase();Array.from(sel.options).forEach(function(o){if(!o.value)return;o.hidden=!!term&&!(o.textContent||'').toLowerCase().includes(term);});};
-"""Allow same-origin authenticated AJAX requests when legacy CSRF state is missing.
+"""
+
+def page_link(label, href, active=''):
+    cls = 'active' if href == active else ''
+    return f'<a class="nav {cls}" href="{esc(href)}">{esc(label)}</a>'
+
+
+def parse_form(handler):
+    n = int(handler.headers.get('Content-Length', '0') or 0)
+    raw = handler.rfile.read(n).decode('utf-8', 'replace') if n else ''
+    d = {k: vals[-1] for k, vals in parse_qs(raw, keep_blank_values=True).items()}
+    return d
+
+
+def parse_multipart_form(handler):
+    ctype=handler.headers.get('Content-Type','')
+    length=int(handler.headers.get('Content-Length','0') or 0)
+    body=handler.rfile.read(length) if length else b''
+    msg=BytesParser(policy=policy.default).parsebytes(b'Content-Type: '+ctype.encode('utf-8')+b'\r\nMIME-Version: 1.0\r\n\r\n'+body)
+    fields={}; upload=None
+    for part in msg.iter_parts():
+        name=part.get_param('name', header='content-disposition')
+        filename=part.get_filename()
+        payload=part.get_payload(decode=True) or b''
+        if filename is not None:
+            upload={'name':name or 'file','filename':os.path.basename(filename),'content_type':part.get_content_type(),'data':payload}
+        elif name:
+            fields[name]=payload.decode(part.get_content_charset() or 'utf-8','replace')
+    return fields,upload
+
+
+def csrf_for(token):
+    return CSRF.setdefault(token, secrets.token_urlsafe(18))
+
+
+def check_csrf(handler, form):
+    token = session_token(handler)
+    expected = CSRF.get(token, '')
+    return bool(expected and secrets.compare_digest(expected, form.get('csrf', '')))
+
+
+def session_token(handler):
+    c = cookies.SimpleCookie(handler.headers.get('Cookie', ''))
+    return c.get('kaka_session').value if c.get('kaka_session') else ''
+
+
+def same_origin_request(handler):
+    """Allow same-origin authenticated AJAX requests when legacy CSRF state is missing.
     This supports deployments where the in-memory CSRF map is reset independently.
     """
     host = (handler.headers.get('Host') or '').strip().lower()
