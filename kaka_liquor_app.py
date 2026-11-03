@@ -1071,7 +1071,7 @@ def sales_page(u, message='', search_query='', search_results=None, selected_cus
     notice=f'<div class="flash error">{esc(message)}</div>' if message else ''
     if role_name(u) in ('ADMIN','MANAGEMENT'):
         c=core.db.c(); active_branches=[dict(b) for b in c.execute('SELECT id,name FROM branches WHERE active=1 ORDER BY name').fetchall()]; c.close()
-        branch_field='<div><label>Sale Branch *</label><select name="branch_id" required><option value="">Select branch</option>'+''.join(f'<option value="{b["id"]}" {"selected" if branch_id==int(b["id"]) else ""}>{esc(b["name"])}</option>' for b in active_branches)+'</select></div>'
+        branch_field=f'<input type="hidden" name="branch_id" value="{branch_id or ""}">'
         branch_selector=branch_scope_selector(u,query,'/sales')
     else:
         branch_field=f'<input type="hidden" name="branch_id" value="{branch_id}">'; branch_selector=''
