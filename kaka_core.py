@@ -116,6 +116,9 @@ class DB:
         if 'branch_id' not in sales_cols:
             c.execute('ALTER TABLE sales ADD COLUMN branch_id INTEGER REFERENCES branches(id)')
         c.execute('UPDATE sales SET branch_id=(SELECT branch_id FROM users WHERE users.id=sales.user_id) WHERE branch_id IS NULL')
+        customer_cols={r['name'] for r in c.execute('PRAGMA table_info(customers)').fetchall()}
+        if 'branch_id' not in customer_cols: c.execute('ALTER TABLE customers ADD COLUMN branch_id INTEGER REFERENCES branches(id)')
+        c.execute('UPDATE customers SET branch_id=(SELECT s.branch_id FROM sales s WHERE s.customer_id=customers.id AND s.branch_id IS NOT NULL ORDER BY s.sold_at DESC LIMIT 1) WHERE branch_id IS NULL')
         ts=now_str()
         # Branches are created only through Administrator > Branch Registration; never invent a default outlet.
         c.execute('UPDATE purchases SET branch_id=(SELECT branch_id FROM users WHERE users.id=purchases.user_id) WHERE branch_id IS NULL')
@@ -508,11 +511,12 @@ def create_sale(u, data):
         customer_id=None; ctype='WALK_IN'
         if customer.get('id'):
             cr=c.execute('SELECT * FROM customers WHERE id=? AND active=1',(int(customer['id']),)).fetchone()
-            if not cr:
-                raise ValueError('Customer not found.')
+            if not cr: raise ValueError('Customer not found.')
+            if str(u.get('access_role') or u.get('role') or '').upper()=='SALES' and int(cr['branch_id'] or 0)!=int(branch_id):
+                raise ValueError('This customer belongs to another branch or has not been assigned to a branch. Ask Administrator to correct the customer record.')
             customer_id=cr['id']; ctype='REGISTERED'
         elif customer.get('full_name') and customer.get('phone'):
-            no='CUS-'+now().strftime('%Y%m%d%H%M%S')+'-'+secrets.token_hex(2).upper(); ts=now_str(); cur=c.execute('INSERT INTO customers(customer_no,full_name,phone,id_no,address,created_at,updated_at) VALUES(?,?,?,?,?,?,?)',(no,customer['full_name'].strip(),customer['phone'].strip(),customer.get('id_no','').strip(),customer.get('address','').strip(),ts,ts)); customer_id=cur.lastrowid; ctype='REGISTERED'
+            no='CUS-'+now().strftime('%Y%m%d%H%M%S')+'-'+secrets.token_hex(2).upper(); ts=now_str(); cur=c.execute('INSERT INTO customers(customer_no,full_name,phone,id_no,address,created_at,updated_at,branch_id) VALUES(?,?,?,?,?,?,?,?)',(no,customer['full_name'].strip(),customer['phone'].strip(),customer.get('id_no','').strip(),customer.get('address','').strip(),ts,ts,branch_id)); customer_id=cur.lastrowid; ctype='REGISTERED'
         receipt=get_setting('receipt_prefix','KAKA')+'-'+now().strftime('%Y%m%d%H%M%S')+'-'+secrets.token_hex(2).upper(); ts=now_str()
         credit_payment_mode=False
         if credit:
