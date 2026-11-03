@@ -100,7 +100,7 @@ jobs:
           fake.wfile=io.BytesIO()
           app.Handler.download_backup(fake,admin)
           backup_bytes=fake.wfile.getvalue()
-          assert backup_bytes.startswith(b"SQLite format 3\\x00")
+          assert backup_bytes.startswith(b"SQLite format 3\x00")
           backup_files=[os.path.join(os.environ["KAKA_DATA_DIR"],"backups",f) for f in os.listdir(os.path.join(os.environ["KAKA_DATA_DIR"],"backups")) if f.endswith(".db")]
           assert backup_files
           snap=sqlite3.connect(backup_files[-1])
