@@ -1267,7 +1267,7 @@ def settings_page(u, message=''):
     report_labels=[('report_end_day','End Day Report','END DAY REPORT'),('report_end_week','End Week Report','END WEEK REPORT'),('report_today','Today','TODAY'),('report_this_week','This Week Report','THIS WEEK REPORT'),('report_monthly','Monthly Report','MONTHLY REPORT'),('report_this_month','This Month','THIS MONTH'),('report_last_month','Last Month','LAST MONTH'),('report_this_year','This Year','THIS YEAR'),('report_last_year','Last Year','LAST YEAR')]
     report_html=''.join(f'<div><label>{esc(label)}</label><input name="{key}" value="{esc(s.get(key,default))}"></div>' for key,label,default in report_labels)
     logo_note='Custom business logo is currently active.' if business_logo_path() else 'Default MONTEZ LIQUOR logo is currently active.'
-    content=f'''{notice}<section class="card"><div class="section-head"><h2>Administrator Settings</h2><span class="pill">NO CODING REQUIRED</span></div><form method="post" action="/settings">{csrf_input(CURRENT_HANDLER)}<div><label>Reason for these changes (required)</label><input name="change_reason" required minlength="5" placeholder="Explain why these settings are changing"></div><div class="form-grid">{fields}</div><h3 style="margin-top:18px">Role & Menu Labels</h3><div class="form-grid">{label_html}</div><div class="actions" style="margin-top:14px"><button class="btn gold">SAVE SETTINGS</button></div></form></section><section class="card" style="margin-top:14px"><div class="section-head"><h3>Report Button Labels</h3><span class="pill">EDIT WITHOUT CODING</span></div><form method="post" action="/settings">{csrf_input(CURRENT_HANDLER)}<div><label>Reason for these changes (required)</label><input name="change_reason" required minlength="5" placeholder="Explain why report labels are changing"></div><div class="form-grid">{report_html}</div><div class="actions" style="margin-top:12px"><button class="btn gold">SAVE REPORT LABELS</button></div></form></section><section class="card" style="margin-top:14px"><div class="section-head"><h3>Business Logo / Picture</h3><span class="pill">MAX 5 MB</span></div><p class="muted">{esc(logo_note)}</p><div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap"><img src="/business-logo" style="width:90px;height:90px;object-fit:contain;border:1px solid var(--line);border-radius:12px;background:#fff;padding:8px"><form method="post" action="/settings/logo" enctype="multipart/form-data">{csrf_input(CURRENT_HANDLER)}<input name="change_reason" placeholder="Reason for logo change" required minlength="5"><input type="file" name="logo" accept="image/png,image/jpeg,image/webp" required><div style="margin-top:10px"><button class="btn gold">UPLOAD BUSINESS LOGO</button></div></form><form method="post" action="/settings/logo">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="remove_logo" value="1"><input name="change_reason" placeholder="Reason for logo removal" required minlength="5"><button class="btn danger">REMOVE CUSTOM LOGO</button></form></div></section>{mpesa_section}<section class="card" style="margin-top:14px"><div class="section-head"><h3>MONTEZ LIQUOR Software Subscription</h3><span class="pill">ADMINISTRATOR ONLY</span></div><p class="muted">Monthly subscription payments are made to the software administrator. November 2026 is exempt; the first payment is due on 5 December 2026. Thereafter, payment is due on the 5th day of each month.</p><form method="post" action="/settings">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="subscription_settings_only" value="1"><div><label>Reason for subscription setting change (required)</label><input name="change_reason" required minlength="5" placeholder="Explain why the subscription amount is changing"></div><div class="form-grid"><div><label>Monthly Subscription Amount (KSh)</label><input type="number" name="subscription_monthly_amount" min="1" max="10000000" step="0.01" required value="{esc(s.get('subscription_monthly_amount',''))}" placeholder="Enter monthly amount"></div><div><label>Payment Method</label><input value="Lipa na M-PESA Paybill" readonly></div><div><label>Administrator Paybill Number</label><input value="516600" readonly></div><div><label>Account Number</label><input value="319851" readonly></div><div><label>Payment Due Day</label><input value="5th day of every month" readonly></div><div><label>First Billing Month</label><input value="December 2026 (November 2026 exempt)" readonly></div></div><div class="actions" style="margin-top:12px"><button class="btn gold">SAVE SUBSCRIPTION SETTINGS</button></div></form></section><section class="card" style="margin-top:14px"><div class="section-head"><h3>Management & Sales Permissions</h3><span class="pill">TICK TO ALLOW · UNTICK TO RESTRICT</span></div><p class="muted">Administrator / Developer always has full access. Every permission below can be granted or restricted independently for Management and Sales Person.</p><form method="post" action="/settings"><input type="hidden" name="permissions_only" value="1">{csrf_input(CURRENT_HANDLER)}<div><label>Reason for permission changes (required)</label><input name="change_reason" required minlength="5" placeholder="Explain why access is changing"></div>{html_table(['Permission','Purpose','Management','Sales Person'],role_rows)}<div class="actions" style="margin-top:12px"><button class="btn gold">SAVE ROLE PERMISSIONS</button></div></form></section>'''
+    content=f'''{notice}<section class="card"><div class="section-head"><h2>Administrator Settings</h2><span class="pill">NO CODING REQUIRED</span></div><form method="post" action="/settings">{csrf_input(CURRENT_HANDLER)}<div><label>Reason for these changes (required)</label><input name="change_reason" required minlength="5" placeholder="Explain why these settings are changing"></div><div class="form-grid">{fields}</div><h3 style="margin-top:18px">Role & Menu Labels</h3><div class="form-grid">{label_html}</div><div class="actions" style="margin-top:14px"><button class="btn gold">SAVE SETTINGS</button></div></form></section><section class="card" style="margin-top:14px"><div class="section-head"><h3>Report Button Labels</h3><span class="pill">EDIT WITHOUT CODING</span></div><form method="post" action="/settings">{csrf_input(CURRENT_HANDLER)}<div><label>Reason for these changes (required)</label><input name="change_reason" required minlength="5" placeholder="Explain why report labels are changing"></div><div class="form-grid">{report_html}</div><div class="actions" style="margin-top:12px"><button class="btn gold">SAVE REPORT LABELS</button></div></form></section><section class="card" style="margin-top:14px"><div class="section-head"><h3>Business Logo / Picture</h3><span class="pill">MAX 5 MB</span></div><p class="muted">{esc(logo_note)}</p><div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap"><img src="/business-logo" style="width:90px;height:90px;object-fit:contain;border:1px solid var(--line);border-radius:12px;background:#fff;padding:8px"><form method="post" action="/settings/logo" enctype="multipart/form-data">{csrf_input(CURRENT_HANDLER)}<input name="change_reason" placeholder="Reason for logo change" required minlength="5"><input type="file" name="logo" accept="image/png,image/jpeg,image/webp" required><div style="margin-top:10px"><button class="btn gold">UPLOAD BUSINESS LOGO</button></div></form><form method="post" action="/settings/logo">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="remove_logo" value="1"><input name="change_reason" placeholder="Reason for logo removal" required minlength="5"><button class="btn danger">REMOVE CUSTOM LOGO</button></form></div></section>{mpesa_section}<section class="card" style="margin-top:14px"><div class="section-head"><h3>MONTEZ LIQUOR Software Subscription</h3><span class="pill">ADMINISTRATOR ONLY</span></div><p class="muted">Monthly subscription. November 2026 is exempt; the first payment is due 5 December 2026. Thereafter, payment is due on the 5th of each month. Non-administrator access is automatically suspended when the due date passes without confirmation. Administrator access remains available.</p><div class="form-grid"><div><label>Monthly Subscription Amount (KSh)</label><input value="{esc(s.get('subscription_monthly_amount','Not set'))}" readonly></div><div><label>Paybill Number</label><input value="516600" readonly></div><div><label>Account Number</label><input value="319851" readonly></div><div><label>Due Date</label><input value="5th of every month" readonly></div><div><label>Billing Status</label><input value="{ 'SUSPENDED — PAYMENT OVERDUE' if subscription_billing_state().get('suspended') else ('PAID' if subscription_billing_state().get('paid') else 'UPCOMING / NOT YET DUE') }" readonly></div><div><label>Billing Month</label><input value="{esc(subscription_billing_state().get('due_month') or 'Exempt until December 2026')}" readonly></div></div><form method="post" action="/settings" style="margin-top:12px">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="subscription_settings_only" value="1"><div class="form-grid"><div><label>Reason for subscription setting change (required)</label><input name="change_reason" required minlength="5" placeholder="Explain why the subscription amount is changing"></div><div><label>Monthly Subscription Amount (KSh)</label><input type="number" name="subscription_monthly_amount" min="1" max="10000000" step="0.01" required value="{esc(s.get('subscription_monthly_amount',''))}" placeholder="Enter monthly amount"></div></div><div class="actions" style="margin-top:12px"><button class="btn gold">SAVE SUBSCRIPTION SETTINGS</button></div></form><hr><h3>Confirm Monthly M-PESA Payment</h3><p class="muted">After checking the payment in the Paybill statement, the Administrator enters the transaction code here. This is a manual verification step; it does not yet connect to Paybill 516600 automatically.</p><form method="post" action="/subscription/confirm">{csrf_input(CURRENT_HANDLER)}<div class="form-grid"><div><label>Billing Month</label><input name="billing_month" value="{esc(subscription_billing_state().get('due_month') or '')}" readonly required></div><div><label>Amount Received (KSh)</label><input type="number" name="amount" min="0.01" step="0.01" value="{esc(s.get('subscription_monthly_amount',''))}" required></div><div><label>M-PESA Transaction Code</label><input name="mpesa_code" maxlength="15" minlength="8" required placeholder="Enter receipt code"></div><div><label>Reason / Verification Note</label><input name="change_reason" minlength="5" required placeholder="Verified against Paybill statement"></div></div><div class="actions" style="margin-top:12px"><button class="btn gold">CONFIRM SUBSCRIPTION PAYMENT</button></div></form><p class="muted">Last confirmed: {esc(s.get('subscription_last_paid_at','Not yet paid'))} · M-PESA code: {esc(s.get('subscription_last_mpesa_code','—'))}</p></section><section class="card" style="margin-top:14px"><div class="section-head"><h3>Management & Sales Permissions</h3><span class="pill">TICK TO ALLOW · UNTICK TO RESTRICT</span></div><p class="muted">Administrator / Developer always has full access. Every permission below can be granted or restricted independently for Management and Sales Person.</p><form method="post" action="/settings"><input type="hidden" name="permissions_only" value="1">{csrf_input(CURRENT_HANDLER)}<div><label>Reason for permission changes (required)</label><input name="change_reason" required minlength="5" placeholder="Explain why access is changing"></div>{html_table(['Permission','Purpose','Management','Sales Person'],role_rows)}<div class="actions" style="margin-top:12px"><button class="btn gold">SAVE ROLE PERMISSIONS</button></div></form></section>'''
     return layout(u,'Administrator Settings',content,'/settings','Overall system parameters and permissions')
 
 
@@ -1943,6 +1943,63 @@ def admin_record_change(u, form):
     finally: c.close()
 
 
+
+SUBSCRIPTION_FIRST_MONTH = '2026-12'
+SUBSCRIPTION_PAYBILL = '516600'
+SUBSCRIPTION_ACCOUNT = '319851'
+
+def subscription_billing_state(today=None):
+    today = today or dt.datetime.now(dt.timezone(dt.timedelta(hours=3))).date()
+    month = today.strftime('%Y-%m')
+    previous = (today.replace(day=1) - dt.timedelta(days=1)).strftime('%Y-%m')
+    first = SUBSCRIPTION_FIRST_MONTH
+    if month < first:
+        return {'due_month':None,'due_date':None,'suspended':False,'upcoming':True,'paid_month':core.get_setting('subscription_paid_month','')}
+    due_month = month if today.day >= 5 else previous
+    if due_month < first:
+        due_month = month
+    due_date = dt.date(int(due_month[:4]),int(due_month[5:]),5)
+    paid_month = core.get_setting('subscription_paid_month','')
+    paid = bool(paid_month and paid_month >= due_month)
+    suspended = today >= due_date and not paid
+    return {'due_month':due_month,'due_date':due_date,'suspended':suspended,'upcoming':today < due_date and not paid,'paid_month':paid_month,'paid':paid}
+
+def subscription_block_page(state):
+    amount = core.get_setting('subscription_monthly_amount','')
+    due_month = state.get('due_month') or 'December 2026'
+    return f'''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Subscription overdue · MONTEZ LIQUOR</title><style>{CSS}</style></head><body class="login-page"><main class="login-card"><h1>MONTEZ LIQUOR — ACCESS SUSPENDED</h1><p>Your software subscription payment has not been confirmed. Normal business access is temporarily suspended.</p><section class="card"><h3>Subscription payment details</h3><p><b>Amount:</b> KSh {esc(amount or 'Not configured — contact Administrator')}</p><p><b>Paybill:</b> {SUBSCRIPTION_PAYBILL}</p><p><b>Account:</b> {SUBSCRIPTION_ACCOUNT}</p><p><b>Billing month:</b> {esc(due_month)}</p><p><b>Due date:</b> 5th day of the month</p></section><p>After payment, contact your Administrator to verify the M-PESA transaction and restore access.</p><a class="btn" href="/logout">LOG OUT</a><footer class="app-powered">Powered by SHADYTECHSOLUTIONS</footer></main></body></html>'''
+
+def confirm_subscription_payment(u, form):
+    if role_name(u) != 'ADMIN':
+        raise PermissionError('Only the Administrator can confirm a software subscription payment.')
+    reason = str(form.get('change_reason','')).strip()
+    code = str(form.get('mpesa_code','')).strip().upper()
+    amount_text = str(form.get('amount','')).strip()
+    month = str(form.get('billing_month','')).strip()
+    if len(reason) < 5: raise ValueError('Enter a reason of at least 5 characters.')
+    if not re.fullmatch(r'[A-Z0-9]{8,15}',code): raise ValueError('Enter a valid M-PESA transaction code (8–15 letters or numbers).')
+    try: amount = round(float(amount_text),2)
+    except Exception: raise ValueError('Enter the amount received.')
+    expected = float(core.get_setting('subscription_monthly_amount','0') or 0)
+    if expected <= 0: raise ValueError('Set the monthly subscription amount in Administrator Settings first.')
+    if abs(amount-expected) > 0.009: raise ValueError(f'Payment amount must match the configured subscription fee of KSh {expected:,.2f}.')
+    state=subscription_billing_state()
+    if not state.get('due_month') or month != state['due_month']: raise ValueError('The billing month does not match the current subscription cycle.')
+    c=core.db.c()
+    try:
+        c.execute('BEGIN IMMEDIATE')
+        duplicate=c.execute('SELECT id FROM mpesa_transactions WHERE upper(trans_id)=?',(code,)).fetchone()
+        if duplicate: raise ValueError('This M-PESA transaction code already exists in the business payment records.')
+        old=core.get_setting('subscription_paid_month','')
+        vals={'subscription_paid_month':month,'subscription_last_mpesa_code':code,'subscription_last_paid_amount':f'{amount:.2f}','subscription_last_paid_at':now(),'subscription_last_paid_by':str(u['id'])}
+        for key,value in vals.items():
+            c.execute('INSERT INTO settings(key,value,updated_at,updated_by) VALUES(?,?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at,updated_by=excluded.updated_by',(key,value,now(),u['id']))
+        core.db.audit(c,u,'SUBSCRIPTION_PAYMENT_CONFIRMED','SOFTWARE_SUBSCRIPTION',month,f'amount={amount:.2f}; mpesa_code={code}; previous_paid_month={old}; reason={reason}; manually verified by Administrator')
+        c.commit()
+    except Exception:
+        c.rollback(); raise
+    finally: c.close()
+
 class Handler(BaseHTTPRequestHandler):
     server_version='MONTEZ-LIQUOR/1.0'
     def log_message(self, fmt,*args):
@@ -1973,6 +2030,8 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/logout': return do_logout(self, _qsval(qs,'auto','0')=='1')
             u=session_user(self)
             if not u: return redirect(self,'/login')
+            billing=subscription_billing_state()
+            if billing.get('suspended') and role_name(u)!='ADMIN': return send_html(self,subscription_block_page(billing),402)
             if path=='/api/mpesa/stk-status': return send_json(self,mpesa_stk_status(_qsval(qs,'checkout_request_id')))
             if path=='/api/mpesa/live-messages': return send_json(self,mpesa_live_messages_json())
             if path=='/mpesa/monitor': return send_html(self,mpesa_monitor_page(u))
@@ -2327,6 +2386,8 @@ def do_POST(self):
             form=parse_form(self)
         if path=='/login': return self.login_post(form)
         u=require_user(self)
+        billing=subscription_billing_state()
+        if billing.get('suspended') and role_name(u)!='ADMIN': return send_html(self,subscription_block_page(billing),402)
         if path=='/customers/credit-payment':
             if not check_csrf(self,form): return send_json(self,{'error':'Invalid form token. Please refresh the page and try again.'},400)
             try: return send_json(self,self.credit_payment_post(u,form))
@@ -2394,9 +2455,24 @@ def do_POST(self):
                 else: raise ValueError('Unknown user action.')
                 add_flash(session_token(self),msg,'success'); return redirect(self,'/users')
             except Exception as e: return send_html(self,users_page(u,str(e)),400)
+        if path=='/subscription/confirm':
+            try:
+                confirm_subscription_payment(u,form)
+                add_flash(session_token(self),'Subscription payment confirmed. Normal access has been restored.','success')
+                return redirect(self,'/settings')
+            except Exception as e:
+                return send_html(self,settings_page(u,str(e)),400)
         if path=='/settings':
             if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
             try:
+                if form.get('subscription_settings_only')=='1':
+                    reason=form.get('change_reason','').strip()
+                    if len(reason)<5: raise ValueError('A reason of at least 5 characters is required for subscription settings.')
+                    amount=float(form.get('subscription_monthly_amount','0') or 0)
+                    if not (0 < amount <= 10000000): raise ValueError('Enter a monthly subscription amount greater than zero and no more than KSh 10,000,000.')
+                    core.update_settings(u,{'subscription_monthly_amount':f'{amount:.2f}','change_reason':reason})
+                    add_flash(session_token(self),'Monthly subscription settings saved.','success')
+                    return redirect(self,'/settings')
                 if form.get('permissions_only')=='1':
                     change_reason=form.get('change_reason','').strip()
                     if len(change_reason)<5: raise ValueError('A reason of at least 5 characters is required for permission changes.')
