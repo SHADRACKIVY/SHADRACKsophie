@@ -1,4 +1,4 @@
-"""Standard-library M-Pesa statement import and normalization for KAKA LIQUOR WINES AND SPIRIT.
+"""Standard-library M-Pesa statement import and normalization for MONTEZ LIQUOR.
 Supports CSV and modern XLSX exports without third-party packages.
 """
 import csv, io, zipfile, xml.etree.ElementTree as ET, re, datetime as dt
