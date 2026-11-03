@@ -2169,12 +2169,12 @@ def mpesa_monitor_page(u):
     return layout(u,'M-Pesa Monitor',f'<section class="card"><h2>Automatic M-Pesa Monitor</h2><p class="muted">STK payments are matched by Checkout Request ID. C2B payments are captured automatically with their M-Pesa receipt code.</p></section><section class="card" style="margin-top:14px"><h3>STK Push Requests</h3>{html_table(["Created","Checkout","Amount","Phone","Status","M-Pesa Code","Updated"],[[esc(r["created_at"]),esc(r["checkout_request_id"]),money(r["amount"]),esc(r["phone"]),esc(r["status"]),esc(r["mpesa_code"] or ""),esc(r["updated_at"])] for r in a],"No STK requests yet.")}</section><section class="card" style="margin-top:14px"><h3>C2B Incoming Payments</h3>{html_table(["Received","M-Pesa Code","Transaction Time","Amount","Phone","Customer","Reference","Status"],[[esc(r["received_at"]),esc(r["trans_id"]),esc(r["trans_time"]),money(r["amount"]),esc(r["msisdn"]),esc((r["first_name"] or "")+" "+(r["last_name"] or "")),esc(r["bill_ref_number"] or ""),esc(r["status"])] for r in b],"No C2B payments received yet.")}</section>','/mpesa/monitor')
 
 
-def _financial_account_events(account, end, branch_id=None):
+def _financial_account_events(account, end, branch_id=None, conn=None):
     """Build a deduplicated cash or Paybill movement stream from recorded business transactions."""
     account=account.upper()
     if account not in ('CASH','PAYBILL'): raise ValueError('Unknown financial account.')
     method='CASH' if account=='CASH' else 'MPESA'
-    c=core.db.c()
+    c=conn or core.db.c()
     events=[]
     try:
         if account=='CASH':
@@ -2224,7 +2224,8 @@ def _financial_account_events(account, end, branch_id=None):
                 FROM mpesa_transactions mt
                 WHERE COALESCE(mt.trans_id,'')<>''
                 AND NOT EXISTS(SELECT 1 FROM sale_payments sp WHERE UPPER(COALESCE(sp.mpesa_code,''))=UPPER(mt.trans_id))
-                AND NOT EXISTS(SELECT 1 FROM credit_payments cp WHERE UPPER(COALESCE(cp.mpesa_code,''))=UPPER(mt.trans_id))""").fetchall():
+                AND NOT EXISTS(SELECT 1 FROM credit_payments cp WHERE UPPER(COALESCE(cp.mpesa_code,''))=UPPER(mt.trans_id))
+                AND NOT EXISTS(SELECT 1 FROM financial_transfers ft WHERE UPPER(ft.mpesa_code)=UPPER(mt.trans_id))""").fetchall():
                 events.append(dict(r))
             for r in c.execute("SELECT sr.transaction_date ts,COALESCE(sr.mpesa_code,'') ref,'Unallocated STK payment' description,sr.amount amount,NULL branch_id,'IN' direction FROM mpesa_stk_requests sr WHERE UPPER(sr.status) IN ('SUCCESS','COMPLETED','SUCCESSFUL') AND COALESCE(sr.mpesa_code,'')<>'' AND NOT EXISTS(SELECT 1 FROM sale_payments sp WHERE UPPER(COALESCE(sp.mpesa_code,''))=UPPER(sr.mpesa_code)) AND NOT EXISTS(SELECT 1 FROM credit_payments cp WHERE UPPER(COALESCE(cp.mpesa_code,''))=UPPER(sr.mpesa_code))").fetchall():
                 events.append(dict(r))
@@ -2233,15 +2234,15 @@ def _financial_account_events(account, end, branch_id=None):
             for r in c.execute("SELECT ob.effective_at ts,'OPENING-PAYBILL' ref,'Opening Paybill balance' description,ob.amount amount,NULL branch_id,'IN' direction FROM financial_opening_balances ob WHERE ob.account='PAYBILL' AND ob.branch_key=0").fetchall():
                 events.append(dict(r))
     finally:
-        c.close()
+        if conn is None: c.close()
     # Exclude events beyond the requested statement end and sort chronologically for a running balance.
     events=[e for e in events if str(e.get('ts') or '')<=end]
     events.sort(key=lambda e:(str(e.get('ts') or ''),str(e.get('ref') or '')))
     return events
 
 
-def financial_statement_data(account, start, end, branch_id=None):
-    events=_financial_account_events(account,end,branch_id)
+def financial_statement_data(account, start, end, branch_id=None, conn=None):
+    events=_financial_account_events(account,end,branch_id,conn)
     balance=0.0; opening=0.0; total_in=0.0; total_out=0.0; rows=[]
     for e in events:
         amount=round(float(e.get('amount') or 0),2)
@@ -2359,7 +2360,7 @@ def financials_post(handler,u,form):
             if not branch: raise ValueError('Select an active registered branch.')
             if c.execute('SELECT 1 FROM financial_transfers WHERE UPPER(mpesa_code)=?',(code,)).fetchone(): raise ValueError('This M-Pesa deposit code has already been used for a transfer.')
             # Recompute the branch cash balance inside the same write transaction to prevent overdrawing.
-            current=financial_statement_data('CASH','1900-01-01 00:00:00','2999-12-31 23:59:59',branch_id)['closing']
+            current=financial_statement_data('CASH','1900-01-01 00:00:00','2999-12-31 23:59:59',branch_id,c)['closing']
             if amount>current: raise ValueError(f'Insufficient recorded cash in {branch["name"]}. Available: {money(current)}.')
             transfer_no='TRF-'+dt.datetime.now().strftime('%Y%m%d%H%M%S')+'-'+secrets.token_hex(3).upper()
             c.execute('INSERT INTO financial_transfers(transfer_no,branch_id,amount,mpesa_code,deposit_reference,note,created_at,created_by) VALUES(?,?,?,?,?,?,?,?)',(transfer_no,branch_id,amount,code,deposit_ref,note,ts,u['id']))
