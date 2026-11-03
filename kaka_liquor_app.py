@@ -1281,7 +1281,7 @@ def expense_page(u, message='', query=None):
     notice=f'<div class="flash error">{esc(message)}</div>' if message else ''
     expense_categories=[x.strip() for x in core.get_setting('expense_categories','Rent,Utilities,Wages,Transport,Licensing,Repairs,Security,Marketing,Bank Charges,Other').split(',') if x.strip()]
     category_opts=''.join(f'<option>{esc(x)}</option>' for x in expense_categories)
-    branch_opts='
+    branch_opts=''
     if role_name(u) in ('ADMIN','MANAGEMENT'):
         c=core.db.c(); brs=[dict(b) for b in c.execute('SELECT id,name FROM branches WHERE active=1 ORDER BY name').fetchall()]; c.close()
         branch_opts='<div><label>Branch *</label><select name="branch_id" required><option value="">Select branch</option>'+''.join(f'<option value="{b["id"]}">{esc(b["name"])}</option>' for b in brs)+'</select></div>'
