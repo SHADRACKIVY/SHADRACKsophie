@@ -254,6 +254,7 @@ class DB:
             'live_refresh_seconds':'5',
             'default_reorder_level':'5',
             'default_unit':'bottle',
+            'expense_categories':'Rent,Utilities,Wages,Transport,Licensing,Repairs,Security,Marketing,Bank Charges,Other',
             'default_payment_transactions':'1',
             'receipt_prefix':'MONTEZ',
             'allow_credit_sales':'YES',
@@ -344,7 +345,7 @@ def update_settings(u, values):
     change_reason=str(values.get('change_reason','')).strip()
     if len(change_reason)<5:
         raise ValueError('A reason of at least 5 characters is required for every Administrator Settings change.')
-    allowed={'business_name','business_subtitle','business_phone','business_address','business_website','business_tax_pin','business_branch_name','receipt_footer','report_footer','dashboard_enabled','currency','idle_timeout_seconds','idle_timeout_minutes','live_refresh_seconds','default_reorder_level','default_unit','default_payment_transactions','receipt_prefix','allow_credit_sales','require_mpesa_code','max_payment_transactions','report_default_days','mpesa_recovery_match_window_minutes','business_logo_filename','mpesa_enabled','mpesa_environment','mpesa_shortcode','mpesa_shortcode_type','mpesa_consumer_key','mpesa_consumer_secret','mpesa_passkey','mpesa_callback_base_url','mpesa_account_reference_prefix','mpesa_transaction_desc','role_admin_label','role_management_label','role_sales_label','nav_dashboard','nav_sales','nav_sales_dashboard','nav_purchases','nav_expenses','nav_customers','nav_reports','nav_stock_report','nav_reorder_report','nav_live','nav_products','nav_users','nav_settings','nav_ledger','nav_profit_loss','nav_expense_report','nav_backup','nav_audit','report_end_day','report_end_week','report_today','report_this_week','report_monthly','report_this_month','report_last_month','report_this_year','report_last_year','performance_green_threshold_pct','performance_basis','subscription_first_month','subscription_due_day','subscription_paybill','subscription_account','ai_assistant_enabled','ai_provider','ai_model','ai_base_url','ai_api_key','subscription_monthly_amount'}
+    allowed={'business_name','business_subtitle','business_phone','business_address','business_website','business_tax_pin','business_branch_name','receipt_footer','report_footer','dashboard_enabled','currency','idle_timeout_seconds','idle_timeout_minutes','live_refresh_seconds','default_reorder_level','default_unit','expense_categories','default_payment_transactions','receipt_prefix','allow_credit_sales','require_mpesa_code','max_payment_transactions','report_default_days','mpesa_recovery_match_window_minutes','business_logo_filename','mpesa_enabled','mpesa_environment','mpesa_shortcode','mpesa_shortcode_type','mpesa_consumer_key','mpesa_consumer_secret','mpesa_passkey','mpesa_callback_base_url','mpesa_account_reference_prefix','mpesa_transaction_desc','role_admin_label','role_management_label','role_sales_label','nav_dashboard','nav_sales','nav_sales_dashboard','nav_purchases','nav_expenses','nav_customers','nav_reports','nav_stock_report','nav_reorder_report','nav_live','nav_products','nav_users','nav_settings','nav_ledger','nav_profit_loss','nav_expense_report','nav_backup','nav_audit','report_end_day','report_end_week','report_today','report_this_week','report_monthly','report_this_month','report_last_month','report_this_year','report_last_year','performance_green_threshold_pct','performance_basis','subscription_first_month','subscription_due_day','subscription_paybill','subscription_account','ai_assistant_enabled','ai_provider','ai_model','ai_base_url','ai_api_key','subscription_monthly_amount'}
     c=db.c(); t=now_str()
     try:
         c.execute('BEGIN')
@@ -371,6 +372,11 @@ def update_settings(u, values):
                     c.execute('INSERT INTO settings(key,value,updated_at,updated_by) VALUES(?,?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at,updated_by=excluded.updated_by',('idle_timeout_seconds',str(n*60),t,u['id']))
                 elif k=='idle_timeout_seconds':
                     c.execute('INSERT INTO settings(key,value,updated_at,updated_by) VALUES(?,?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at,updated_by=excluded.updated_by',('idle_timeout_minutes',str(max(1,round(n/60))),t,u['id']))
+            if k=='expense_categories':
+                categories=[x.strip() for x in vv.split(',') if x.strip()]
+                if not categories or len(categories)>30 or any(len(x)>40 for x in categories): raise ValueError('Enter between 1 and 30 expense categories; each category must be 40 characters or fewer.')
+                if len({x.casefold() for x in categories})!=len(categories): raise ValueError('Expense categories must not contain duplicates.')
+                vv=','.join(categories)
             if k=='subscription_first_month' and not re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])',vv): raise ValueError('First subscription month must use YYYY-MM format.')
             if k in ('subscription_paybill','subscription_account') and not vv: raise ValueError(f'{k} cannot be blank.')
             if k=='subscription_monthly_amount':
