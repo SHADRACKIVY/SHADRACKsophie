@@ -3420,6 +3420,43 @@ def do_POST(self):
                 else: raise ValueError('Unknown user action.')
                 add_flash(session_token(self),msg,'success'); return redirect(self,'/users')
             except Exception as e: return send_html(self,users_page(u,str(e)),400)
+        if path=='/branches':
+            if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
+            c=core.db.c()
+            try:
+                action=form.get('action','create'); ts=now()
+                if action=='create':
+                    name=form.get('name','').strip()
+                    code=form.get('code','').strip().upper() or None
+                    location=form.get('location','').strip()
+                    phone=form.get('phone','').strip()
+                    if not name: raise ValueError('Branch name is required.')
+                    if c.execute('SELECT 1 FROM branches WHERE lower(name)=lower(?)',(name,)).fetchone():
+                        raise ValueError('A branch with this name already exists.')
+                    if code and c.execute('SELECT 1 FROM branches WHERE upper(code)=upper(?)',(code,)).fetchone():
+                        raise ValueError('A branch with this code already exists.')
+                    c.execute('INSERT INTO branches(name,code,location,phone,active,created_at,updated_at) VALUES(?,?,?,?,1,?,?)',(name,code,location,phone,ts,ts))
+                    bid=c.execute('SELECT id FROM branches WHERE name=?',(name,)).fetchone()['id']
+                    for pr in c.execute('SELECT id,avg_cost,sell_price,wholesale_price,reorder_level FROM products').fetchall():
+                        c.execute('INSERT OR IGNORE INTO branch_stock(branch_id,product_id,qty,avg_cost,buy_price,sell_price,wholesale_price,reorder_level,updated_at) VALUES(?,?,0,?,?,?,?,?,?)',(bid,pr['id'],float(pr['avg_cost'] or 0),float(pr['avg_cost'] or 0),float(pr['sell_price'] or 0),float(pr['wholesale_price'] or pr['sell_price'] or 0),float(pr['reorder_level'] or 0),ts))
+                    core.db.audit(c,u,'CREATE','BRANCH',bid,f'{name} code={code or ""}')
+                    c.commit(); msg='Branch registered successfully.'
+                elif action=='toggle':
+                    bid=int(form.get('branch_id','0') or 0); active=1 if form.get('active')=='1' else 0
+                    br=c.execute('SELECT * FROM branches WHERE id=?',(bid,)).fetchone()
+                    if not br: raise ValueError('Branch not found.')
+                    if not active and c.execute('SELECT COUNT(*) n FROM users WHERE branch_id=? AND active=1 AND access_role="SALES"',(bid,)).fetchone()['n']:
+                        raise ValueError('Reassign or disable all active Sales Persons before deactivating this branch.')
+                    c.execute('UPDATE branches SET active=?,updated_at=? WHERE id=?',(active,ts,bid))
+                    core.db.audit(c,u,'UPDATE','BRANCH',bid,f'active={active}')
+                    c.commit(); msg='Branch status updated.'
+                else:
+                    raise ValueError('Unknown branch action.')
+                add_flash(session_token(self),msg,'success'); return redirect(self,'/branches')
+            except Exception as e:
+                c.rollback(); return send_html(self,branches_page(u,str(e)),400)
+            finally:
+                c.close()
         if path=='/subscription/confirm':
             try:
                 confirm_subscription_payment(u,form)
