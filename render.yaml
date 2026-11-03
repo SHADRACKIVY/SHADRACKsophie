@@ -7,11 +7,19 @@ services:
     startCommand: "python kaka_liquor_app.py"
     healthCheckPath: /health
     envVars:
+      - key: MONTEZ_DATA_DIR
+        value: /tmp/kaka-liquor-data
       - key: KAKA_DATA_DIR
         value: /tmp/kaka-liquor-data
+      - key: MONTEZ_SECURE_COOKIE
+        value: "1"
       - key: KAKA_SECURE_COOKIE
         value: "1"
+      - key: MONTEZ_PORT
+        value: "10000"
       - key: KAKA_PORT
         value: "10000"
+      - key: MONTEZ_INITIAL_ADMIN_PASSWORD
+        sync: false
       - key: KAKA_INITIAL_ADMIN_PASSWORD
         sync: false

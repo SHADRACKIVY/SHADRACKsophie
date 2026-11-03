@@ -6,7 +6,7 @@ from urllib.parse import urlparse, parse_qs
 
 APP_NAME='MONTEZ LIQUOR'
 BASE_DIR=os.path.abspath(os.path.dirname(__file__))
-DATA_DIR=os.environ.get('KAKA_DATA_DIR',os.path.join(os.path.expanduser('~'),'KAKA_LIQUOR_DATA'))
+DATA_DIR=os.environ.get('MONTEZ_DATA_DIR') or os.environ.get('KAKA_DATA_DIR') or os.path.join(os.path.expanduser('~'),'MONTEZ_LIQUOR_DATA')
 os.makedirs(DATA_DIR, exist_ok=True)
 DB_PATH=os.path.join(DATA_DIR,'kaka_liquor.db')
 BACKUP_DIR=os.path.join(DATA_DIR,'backups'); os.makedirs(BACKUP_DIR, exist_ok=True)

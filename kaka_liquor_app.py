@@ -12,17 +12,17 @@ from urllib.parse import urlparse, parse_qs, quote, urlencode
 from urllib import request as urlrequest, error as urlerror
 
 # Keep the database outside the app folder so upgrades do not erase data.
-DATA_DIR = os.environ.get('KAKA_DATA_DIR', os.path.join(os.path.expanduser('~'), 'KAKA_LIQUOR_DATA'))
+DATA_DIR = os.environ.get('MONTEZ_DATA_DIR') or os.environ.get('KAKA_DATA_DIR') or os.path.join(os.path.expanduser('~'), 'MONTEZ_LIQUOR_DATA')
 os.makedirs(DATA_DIR, exist_ok=True)
 os.environ['KAKA_DATA_DIR'] = DATA_DIR
-os.environ.setdefault('KAKA_PORT', os.environ.get('PORT', '5000'))
+os.environ.setdefault('KAKA_PORT', os.environ.get('MONTEZ_PORT', os.environ.get('PORT', '5000')))
 
 import kaka_core as core
 import mpesa_integration as mpesa
 import mpesa_recovery as mpesa_recovery
 
 # Cloud safety: require a private admin password on first deployment.
-_admin_password = os.environ.get('KAKA_INITIAL_ADMIN_PASSWORD', '').strip()
+_admin_password = (os.environ.get('MONTEZ_INITIAL_ADMIN_PASSWORD') or os.environ.get('KAKA_INITIAL_ADMIN_PASSWORD', '')).strip()
 try:
     _c = core.db.c()
     _admin = _c.execute("SELECT id, password_hash FROM users WHERE username='admin'").fetchone()
@@ -42,7 +42,7 @@ finally:
 APP_NAME = 'MONTEZ LIQUOR'
 HOST = '0.0.0.0'
 PORT = int(os.environ.get('KAKA_PORT', '5000'))
-SECURE_COOKIE = os.environ.get('KAKA_SECURE_COOKIE', '0') == '1'
+SECURE_COOKIE = (os.environ.get('MONTEZ_SECURE_COOKIE') or os.environ.get('KAKA_SECURE_COOKIE', '0')) == '1'
 COOKIE_SUFFIX = '; Secure' if SECURE_COOKIE else ''
 SESSIONS = {}
 CSRF = {}
