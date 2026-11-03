@@ -143,62 +143,11 @@ def business_logo_bytes():
     return LOGO.encode('utf-8'), 'image/svg+xml'
 
 
-SCANNER_MODAL = '<div id="scanner_modal" class="scanner-modal"><div class="scanner-box"><div class="section-head"><h3>Scan Product</h3><button class="btn" type="button" onclick="closeScanner()">CLOSE</button></div><video id="scanner_video" playsinline muted></video><div id="scanner_status" class="scanner-status">Point the camera at a barcode…</div></div></div>'
+SCANNER_MODAL = ''
 
 SCANNER_JS = r"""
-window.scannerBeep=function(){try{var AC=window.AudioContext||window.webkitAudioContext;if(!AC)return;var ctx=new AC();var osc=ctx.createOscillator(),gain=ctx.createGain();osc.type='sine';osc.frequency.value=880;gain.gain.setValueAtTime(0.0001,ctx.currentTime);gain.gain.exponentialRampToValueAtTime(0.16,ctx.currentTime+0.01);gain.gain.exponentialRampToValueAtTime(0.0001,ctx.currentTime+0.13);osc.connect(gain);gain.connect(ctx.destination);osc.start();osc.stop(ctx.currentTime+0.14);setTimeout(function(){try{ctx.close()}catch(e){}},250);}catch(e){}};
 window.filterSelectOptions=function(input,selectId){var q=typeof input==='string'?document.getElementById(input):input,sel=document.getElementById(selectId);if(!q||!sel)return;var term=(q.value||'').trim().toLowerCase();Array.from(sel.options).forEach(function(o){if(!o.value)return;o.hidden=!!term&&!(o.textContent||'').toLowerCase().includes(term);});};
-window.closeScanner=function(){var modal=document.getElementById('scanner_modal'),video=document.getElementById('scanner_video');try{if(video&&video.srcObject){video.srcObject.getTracks().forEach(function(t){t.stop()});video.srcObject=null;}}catch(e){}if(modal)modal.classList.remove('open');};
-window.openScanner=function(targetId){var modal=document.getElementById('scanner_modal'),video=document.getElementById('scanner_video'),status=document.getElementById('scanner_status'),target=document.getElementById(targetId);if(!modal||!video||!target){alert('Scanner is unavailable.');return;}if(!('BarcodeDetector' in window)){alert('Camera scanning is not supported by this browser.');return;}if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){alert('Camera access is unavailable.');return;}modal.classList.add('open');status.textContent='Barcode scanning is not used. Search by product name instead.';navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}}}).then(function(stream){video.srcObject=stream;video.play();var detector=new BarcodeDetector({formats:['ean_13','ean_8','upc_a','upc_e','code_128','code_39','qr_code']});function loop(){if(!modal.classList.contains('open'))return;detector.detect(video).then(function(codes){if(codes.length&&codes[0].rawValue){target.value=codes[0].rawValue;window.scannerBeep();status.textContent='Barcode scanned: '+codes[0].rawValue;setTimeout(function(){window.closeScanner();if(targetId==='sales_sku_scan')window.lookupProductBySku(targetId);else if(targetId==='purchase_sku_scan')window.lookupGenericSku(targetId,'purchase_product_id');},120);return;}requestAnimationFrame(loop);}).catch(function(){requestAnimationFrame(loop);});}requestAnimationFrame(loop);}).catch(function(){status.textContent='Camera could not be opened.';});};
-window.openScannerFill=function(targetId){window.openScanner(targetId);};
-"""
-
-def page_link(label, href, active=''):
-    cls = 'active' if href == active else ''
-    return f'<a class="nav {cls}" href="{esc(href)}">{esc(label)}</a>'
-
-
-def parse_form(handler):
-    n = int(handler.headers.get('Content-Length', '0') or 0)
-    raw = handler.rfile.read(n).decode('utf-8', 'replace') if n else ''
-    d = {k: vals[-1] for k, vals in parse_qs(raw, keep_blank_values=True).items()}
-    return d
-
-
-def parse_multipart_form(handler):
-    ctype=handler.headers.get('Content-Type','')
-    length=int(handler.headers.get('Content-Length','0') or 0)
-    body=handler.rfile.read(length) if length else b''
-    msg=BytesParser(policy=policy.default).parsebytes(b'Content-Type: '+ctype.encode('utf-8')+b'\r\nMIME-Version: 1.0\r\n\r\n'+body)
-    fields={}; upload=None
-    for part in msg.iter_parts():
-        name=part.get_param('name', header='content-disposition')
-        filename=part.get_filename()
-        payload=part.get_payload(decode=True) or b''
-        if filename is not None:
-            upload={'name':name or 'file','filename':os.path.basename(filename),'content_type':part.get_content_type(),'data':payload}
-        elif name:
-            fields[name]=payload.decode(part.get_content_charset() or 'utf-8','replace')
-    return fields,upload
-
-
-def csrf_for(token):
-    return CSRF.setdefault(token, secrets.token_urlsafe(18))
-
-
-def check_csrf(handler, form):
-    token = session_token(handler)
-    expected = CSRF.get(token, '')
-    return bool(expected and secrets.compare_digest(expected, form.get('csrf', '')))
-
-
-def session_token(handler):
-    c = cookies.SimpleCookie(handler.headers.get('Cookie', ''))
-    return c.get('kaka_session').value if c.get('kaka_session') else ''
-
-
-def same_origin_request(handler):
-    """Allow same-origin authenticated AJAX requests when legacy CSRF state is missing.
+"""Allow same-origin authenticated AJAX requests when legacy CSRF state is missing.
     This supports deployments where the in-memory CSRF map is reset independently.
     """
     host = (handler.headers.get('Host') or '').strip().lower()
