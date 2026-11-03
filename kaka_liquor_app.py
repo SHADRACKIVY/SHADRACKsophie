@@ -487,7 +487,9 @@ def save_product(u, form):
             if not br: raise ValueError('Register an active branch before entering opening stock.')
             branch_id=br['id']
         if not c.execute('SELECT 1 FROM branches WHERE id=? AND active=1',(branch_id,)).fetchone(): raise ValueError('Selected branch is inactive or unavailable.')
-        c.execute('INSERT INTO branch_stock(branch_id,product_id,qty,avg_cost,buy_price,sell_price,wholesale_price,reorder_level,updated_at) VALUES(?,?,?,?,?,?,?,?,?)',(branch_id,pid,stock,avg_cost,opening_cost,sell,wholesale,reorder,ts))
+        for br in c.execute('SELECT id FROM branches WHERE active=1').fetchall():
+            c.execute('INSERT OR IGNORE INTO branch_stock(branch_id,product_id,qty,avg_cost,buy_price,sell_price,wholesale_price,reorder_level,updated_at) VALUES(?,?,0,?,?,?,?,?,?)',(br['id'],pid,avg_cost,opening_cost,sell,wholesale,reorder,ts))
+        c.execute('UPDATE branch_stock SET qty=?,avg_cost=?,buy_price=?,sell_price=?,wholesale_price=?,reorder_level=?,updated_at=? WHERE branch_id=? AND product_id=?',(stock,avg_cost,opening_cost,sell,wholesale,reorder,ts,branch_id,pid))
         if stock>0:
             c.execute('INSERT INTO stock_movements(movement_time,user_id,product_id,movement_type,qty,before_qty,after_qty,unit_cost,reference,branch_id) VALUES(?,?,?,?,?,?,?,?,?,?)',(ts,u['id'],pid,'OPENING_STOCK',stock,0,stock,opening_cost,product_no,branch_id))
         core.db.audit(c,u,'CREATE','PRODUCT',pid,f'{product_no} {name}; opening_stock={stock:g}; retail_price={sell:.2f}; wholesale_price={wholesale:.2f}; cogs_unit_cost={opening_cost:.2f}'); c.commit(); return pid,product_no
@@ -2180,7 +2182,10 @@ class Handler(BaseHTTPRequestHandler):
                     if action=='create':
                         name=form.get('name','').strip(); code=form.get('code','').strip().upper() or None; location=form.get('location','').strip(); phone=form.get('phone','').strip()
                         if not name: raise ValueError('Branch name is required.')
-                        c.execute('INSERT INTO branches(name,code,location,phone,active,created_at,updated_at) VALUES(?,?,?,?,1,?,?)',(name,code,location,phone,ts,ts)); bid=c.execute('SELECT id FROM branches WHERE name=?',(name,)).fetchone()['id']; core.db.audit(c,u,'CREATE','BRANCH',bid,f'{name} code={code or ""}'); c.commit(); msg='Branch registered successfully.'
+                        c.execute('INSERT INTO branches(name,code,location,phone,active,created_at,updated_at) VALUES(?,?,?,?,1,?,?)',(name,code,location,phone,ts,ts)); bid=c.execute('SELECT id FROM branches WHERE name=?',(name,)).fetchone()['id']
+                        for pr in c.execute('SELECT id,avg_cost,sell_price,wholesale_price,reorder_level FROM products').fetchall():
+                            c.execute('INSERT OR IGNORE INTO branch_stock(branch_id,product_id,qty,avg_cost,buy_price,sell_price,wholesale_price,reorder_level,updated_at) VALUES(?,?,0,?,?,?,?,?,?)',(bid,pr['id'],float(pr['avg_cost'] or 0),float(pr['avg_cost'] or 0),float(pr['sell_price'] or 0),float(pr['wholesale_price'] or pr['sell_price'] or 0),float(pr['reorder_level'] or 0),ts))
+                        core.db.audit(c,u,'CREATE','BRANCH',bid,f'{name} code={code or ""}'); c.commit(); msg='Branch registered successfully.'
                     elif action=='toggle':
                         bid=int(form.get('branch_id','0') or 0); active=1 if form.get('active')=='1' else 0
                         br=c.execute('SELECT * FROM branches WHERE id=?',(bid,)).fetchone()
