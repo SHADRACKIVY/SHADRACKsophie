@@ -63,6 +63,12 @@ jobs:
           core.update_permissions(admin,{"roles":{"MANAGEMENT":{"VIEW_STOCK":True,"VIEW_REPORTS":False,"MANAGE_SETTINGS":True,"MANAGE_PRODUCTS":True},"SALES":{"CREATE_SALE":True,"MANAGE_USERS":True}},"users":{}})
           manager={"id":manager_id,"username":"ci_role_manager","full_name":"CI Role Manager","access_role":"MANAGEMENT","role":"SALES","branch_id":None}
           sales={"id":sales_id,"username":"ci_role_sales","full_name":"CI Role Sales","access_role":"SALES","role":"SALES","branch_id":bid}
+          # Simulate a stale disabled override from an older deployment; startup migration must re-enable it.
+          c=core.db.c()
+          c.execute("INSERT INTO user_permissions(user_id,key,enabled) VALUES(?,?,0) ON CONFLICT(user_id,key) DO UPDATE SET enabled=0",(manager_id,"MANAGE_PRODUCTS"))
+          c.commit(); c.close()
+          core.db.init()
+          assert core.effective_permissions(manager)["MANAGE_PRODUCTS"] is True
           assert core.effective_permissions(manager)["VIEW_STOCK"] is True
           assert core.effective_permissions(manager)["MANAGE_PRODUCTS"] is True
           app.CURRENT_HANDLER=type("FakeHandler",(),{"headers":{}})()
