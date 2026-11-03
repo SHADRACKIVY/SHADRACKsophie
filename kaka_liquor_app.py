@@ -401,6 +401,7 @@ def save_purchase(u, form):
     try:
         c.execute('BEGIN IMMEDIATE')
         branch_id=(u.get('branch_id') if role_name(u) not in ('ADMIN','MANAGEMENT') else (int(form.get('branch_id') or 0) or u.get('branch_id')))
+        if not branch_id and role_name(u)=='SALES': raise ValueError('Assign this Sales Person to a branch in User Management before recording purchases.')
         if not branch_id:
             br=c.execute('SELECT id FROM branches WHERE active=1 ORDER BY id LIMIT 1').fetchone()
             if not br: raise ValueError('Register an active branch before recording purchases.')
@@ -482,6 +483,7 @@ def save_product(u, form):
         cur=c.execute('INSERT INTO products(product_no,sku,name,category,unit,sell_price,wholesale_price,avg_cost,stock_qty,reorder_level,active,created_at,updated_at) VALUES(NULL,?,?,?,?,?,?,?,?,?,1,?,?)',(sku,name,cat,unit,sell,wholesale,avg_cost,0,reorder,ts,ts)); pid=cur.lastrowid; product_no=f'PRD-{pid:05d}'
         c.execute('UPDATE products SET product_no=? WHERE id=?',(product_no,pid))
         branch_id=(u.get('branch_id') if role_name(u) not in ('ADMIN','MANAGEMENT') else (int(form.get('branch_id') or 0) or u.get('branch_id')))
+        if not branch_id and role_name(u)=='SALES': raise ValueError('Assign this Sales Person to a branch in User Management before registering products.')
         if not branch_id:
             br=c.execute('SELECT id FROM branches WHERE active=1 ORDER BY id LIMIT 1').fetchone()
             if not br: raise ValueError('Register an active branch before entering opening stock.')
