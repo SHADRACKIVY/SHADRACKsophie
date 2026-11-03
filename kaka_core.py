@@ -133,11 +133,7 @@ class DB:
         c.execute('UPDATE purchases SET branch_id=(SELECT branch_id FROM users WHERE users.id=purchases.user_id) WHERE branch_id IS NULL')
         c.execute('UPDATE stock_movements SET branch_id=(SELECT branch_id FROM users WHERE users.id=stock_movements.user_id) WHERE branch_id IS NULL')
         c.execute('UPDATE expenses SET branch_id=(SELECT branch_id FROM users WHERE users.id=expenses.user_id) WHERE branch_id IS NULL')
-        # Ensure every existing and newly created branch has a zeroed row for every catalogue product.
-        for br in c.execute('SELECT id FROM branches').fetchall():
-            for pr in c.execute('SELECT id,avg_cost,sell_price,wholesale_price,reorder_level FROM products').fetchall():
-                c.execute('INSERT OR IGNORE INTO branch_stock(branch_id,product_id,qty,avg_cost,buy_price,sell_price,wholesale_price,reorder_level,updated_at) VALUES(?,?,0,?,?,?,?,?,?)',
-                    (br['id'],pr['id'],float(pr['avg_cost'] or 0),float(pr['avg_cost'] or 0),float(pr['sell_price'] or 0),float(pr['wholesale_price'] or pr['sell_price'] or 0),float(pr['reorder_level'] or 0),now_str()))
+        # Branch stock rows are initialized after all legacy product columns have been migrated.
         c.execute('CREATE INDEX IF NOT EXISTS idx_sales_branch_date ON sales(branch_id,sold_at)')
         c.execute('CREATE INDEX IF NOT EXISTS idx_sales_user_date ON sales(user_id,sold_at)')
         # Shared-stock wholesale/retail migration: distinct prices and sale-channel tracking.
@@ -146,6 +142,12 @@ class DB:
             c.execute('ALTER TABLE products ADD COLUMN wholesale_price REAL NOT NULL DEFAULT 0')
             # Legacy products default to their former single price until an admin configures wholesale pricing.
             c.execute('UPDATE products SET wholesale_price=sell_price WHERE wholesale_price<=0')
+        # Create zeroed branch balances only after legacy product columns are present.
+        # Never copy legacy shared quantities into branches; physical opening stock is entered separately.
+        for br in c.execute('SELECT id FROM branches').fetchall():
+            for pr in c.execute('SELECT id,avg_cost,sell_price,wholesale_price,reorder_level FROM products').fetchall():
+                c.execute('INSERT OR IGNORE INTO branch_stock(branch_id,product_id,qty,avg_cost,buy_price,sell_price,wholesale_price,reorder_level,updated_at) VALUES(?,?,0,?,?,?,?,?,?)',
+                    (br['id'],pr['id'],float(pr['avg_cost'] or 0),float(pr['avg_cost'] or 0),float(pr['sell_price'] or 0),float(pr['wholesale_price'] or pr['sell_price'] or 0),float(pr['reorder_level'] or 0),now_str()))
         sales_cols={r['name'] for r in c.execute('PRAGMA table_info(sales)').fetchall()}
         if 'sale_type' not in sales_cols:
             c.execute("ALTER TABLE sales ADD COLUMN sale_type TEXT NOT NULL DEFAULT 'RETAIL'")
