@@ -2315,9 +2315,9 @@ def financials_page(u, query=None, message=''):
     <p class="muted">Enter verified balances already held when the system's financial tracking starts. Each account/branch can be initialized only once; the entry is retained in the audit trail.</p>
     <form method="post" action="/financials" class="form-grid">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="opening">
     <div><label>Account</label><select name="account" id="opening_account" onchange="document.getElementById('opening_branch_wrap').style.display=this.value==='CASH'?'block':'none'"><option value="CASH">Cash</option><option value="PAYBILL">M-Pesa Paybill</option></select></div>
-    <div id="opening_branch_wrap"><label>Branch (for cash opening balance)</label><select name="branch_id" required><option value="">SELECT BRANCH</option>{''.join(f'<option value="{int(b["id"])}">{esc(b["name"])}</option>' for b in branches)}</select></div>
+    <div id="opening_branch_wrap"><label>Branch (for cash opening balance)</label><select name="branch_id"><option value="">SELECT BRANCH</option>{''.join(f'<option value="{int(b["id"])}">{esc(b["name"])}</option>' for b in branches)}</select></div>
     <div><label>Verified opening balance (KSh)</label><input type="number" name="amount" min="0" step="0.01" required></div>
-    <div><label>Effective date & time</label><input type="datetime-local" name="effective_at" value="{dt.datetime.now().strftime('%Y-%m-%dT%H:%M')}" required></div>
+    <div><label>Effective date & time</label><input type="datetime-local" name="effective_at" value="{dt.datetime.now(dt.timezone(dt.timedelta(hours=3))).strftime('%Y-%m-%dT%H:%M')}" required></div>
     <div style="grid-column:1/-1"><label>Verification note</label><input name="note" maxlength="250" required></div>
     <div class="actions"><button class="btn gold">SAVE INITIAL BALANCE</button></div></form></section>'''
     manual_form=f'''<section class="card" style="margin-top:14px"><div class="section-head"><h2>Record Other Cash / Paybill Movement</h2><span class="pill">ADMINISTRATOR ONLY</span></div><p class="muted">Use only for a genuine bank/Paybill withdrawal, charge or adjustment not already recorded as a sale, purchase, expense or cash-to-Paybill transfer. Do not duplicate existing transactions.</p><form method="post" action="/financials" class="form-grid">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="manual_entry"><div><label>Account</label><select name="account" id="manual_account" onchange="document.getElementById('manual_branch_wrap').style.display=this.value==='CASH'?'block':'none'"><option value="PAYBILL">M-Pesa Paybill</option><option value="CASH">Cash</option></select></div><div><label>Direction</label><select name="direction"><option value="OUT">Money Out / Withdrawal</option><option value="IN">Money In / Adjustment</option></select></div><div id="manual_branch_wrap" style="display:none"><label>Branch (cash only)</label><select name="branch_id"><option value="">SELECT BRANCH</option>{''.join(f'<option value="{int(b["id"])}">{esc(b["name"])}</option>' for b in branches)}</select></div><div><label>Amount (KSh)</label><input type="number" name="amount" min="0.01" step="0.01" required></div><div><label>Transaction reference</label><input name="reference" maxlength="80" required></div><div><label>Date & time</label><input type="datetime-local" name="occurred_at" value="{dt.datetime.now().strftime('%Y-%m-%dT%H:%M')}" required></div><div style="grid-column:1/-1"><label>Description / reason</label><input name="description" maxlength="250" required></div><div class="actions"><button class="btn gold">RECORD FINANCIAL MOVEMENT</button></div></form></section>'''
@@ -2338,10 +2338,11 @@ def financials_export(handler,u,query):
     c=core.db.c()
     try: branches=[dict(r) for r in c.execute('SELECT id,name FROM branches').fetchall()]
     finally: c.close()
-    rows=[]
+    rows=[['STATEMENT SUMMARY','OPENING BALANCE','','',data['opening'],0,data['opening']]]
     for r in data['rows']:
         bn=next((b['name'] for b in branches if r['branch_id'] is not None and int(b['id'])==int(r['branch_id'])),'Company / Paybill')
         rows.append([r['date'],r['reference'],r['description'],bn,r['money_in'],r['money_out'],r['balance']])
+    rows.append(['STATEMENT SUMMARY','TOTALS','','',data['money_in'],data['money_out'],data['closing']])
     title='MONTEZ LIQUOR '+('CASH' if account=='CASH' else 'M-PESA PAYBILL')+' STATEMENT'
     out,ctype,filename=_export_rows(title,headers,rows,_qsval(query,'format','xlsx'))
     return send_file(handler,out,ctype,filename)
