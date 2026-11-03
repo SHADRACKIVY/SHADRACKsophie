@@ -1677,11 +1677,12 @@ def mpesa_stk_request(u, amount, phone, batch_payload=None, sequence_no=1):
     amt=float(amount); phone_n=mpesa.normalize_phone(phone)
     if amt<=0: raise mpesa.MpesaError('Payment amount must be greater than zero.')
     c=core.db.c(); ts=core.now_str(); batch_id=None
+    role=role_name(u); branch_id=int((batch_payload or {}).get('branch_id','0') or 0) if role in ('ADMIN','MANAGEMENT') else int(u.get('branch_id') or 0)
+    if not branch_id: c.close(); raise mpesa.MpesaError('Select an active branch before requesting an M-Pesa prompt.')
     try:
+        if not c.execute('SELECT 1 FROM branches WHERE id=? AND active=1',(branch_id,)).fetchone(): raise mpesa.MpesaError('Selected branch is inactive or unavailable.')
         # First STK request can create the pending M-Pesa-only sale batch.
         if batch_payload and batch_payload.get('all_mpesa'):
-            role=role_name(u); branch_id=int(batch_payload.get('branch_id','0') or 0) if role in ('ADMIN','MANAGEMENT') else int(u.get('branch_id') or 0)
-            if not branch_id: raise mpesa.MpesaError('Select an active branch before requesting M-Pesa payments.')
             pid=int(batch_payload['product_id']); qty=int(batch_payload['qty']); total=float(batch_payload['total']); n=int(batch_payload['payment_count'])
             if sequence_no<1 or sequence_no>n: raise mpesa.MpesaError('Invalid payment transaction number.')
             existing_rows=c.execute("SELECT id,customer_json,branch_id FROM pending_payment_batches WHERE user_id=? AND status='PENDING' AND product_id=? AND ABS(total-?)<0.01 AND branch_id=? ORDER BY id DESC LIMIT 20",(u['id'],pid,total,branch_id)).fetchall()
@@ -1704,7 +1705,7 @@ def mpesa_stk_request(u, amount, phone, batch_payload=None, sequence_no=1):
         data=mpesa.stk_push(core,amt,phone_n,account_ref,core.get_setting('mpesa_transaction_desc','MONTEZ LIQUOR'))
         checkout=data.get('CheckoutRequestID'); merchant=data.get('MerchantRequestID')
         if not checkout: raise mpesa.MpesaError(data.get('ResponseDescription') or data.get('errorMessage') or 'No CheckoutRequestID returned by M-Pesa.')
-        c.execute('INSERT INTO mpesa_stk_requests(created_at,user_id,checkout_request_id,merchant_request_id,client_ref,amount,phone,status,raw_response,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',(ts,u['id'],checkout,merchant,client_ref,amt,phone_n,'PENDING',json.dumps(data,ensure_ascii=False),ts))
+        c.execute('INSERT INTO mpesa_stk_requests(created_at,user_id,checkout_request_id,merchant_request_id,client_ref,amount,phone,status,raw_response,updated_at,branch_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(ts,u['id'],checkout,merchant,client_ref,amt,phone_n,'PENDING',json.dumps(data,ensure_ascii=False),ts,branch_id))
         if batch_id:
             c.execute('UPDATE pending_payment_allocations SET checkout_request_id=?,phone=?,updated_at=? WHERE batch_id=? AND sequence_no=?',(checkout,phone_n,ts,batch_id,sequence_no))
             c.execute('UPDATE pending_payment_batches SET batch_ref=?,updated_at=? WHERE id=?',(account_ref,ts,batch_id))
