@@ -4,7 +4,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-APP_NAME='KAKA LIQUOR WINES AND SPIRIT'
+APP_NAME='MONTEZ LIQUOR'
 BASE_DIR=os.path.abspath(os.path.dirname(__file__))
 DATA_DIR=os.environ.get('KAKA_DATA_DIR',os.path.join(os.path.expanduser('~'),'KAKA_LIQUOR_DATA'))
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -199,8 +199,8 @@ class DB:
             'business_website':'',
             'business_tax_pin':'',
             'business_branch_name':'Main Branch',
-            'receipt_footer':'Thank you for shopping with us.',
-            'report_footer':'',
+            'receipt_footer':'Thank you for shopping with us. | Powered by SHADYTECHSOLUTIONS',
+            'report_footer':'Powered by SHADYTECHSOLUTIONS',
             'dashboard_enabled':'YES',
             'currency':'KSh',
             'idle_timeout_seconds':'120',
@@ -209,7 +209,7 @@ class DB:
             'default_reorder_level':'5',
             'default_unit':'bottle',
             'default_payment_transactions':'1',
-            'receipt_prefix':'KAKA',
+            'receipt_prefix':'MONTEZ',
             'allow_credit_sales':'YES',
             'require_mpesa_code':'YES',
             'mpesa_enabled':'NO',
@@ -220,8 +220,8 @@ class DB:
             'mpesa_consumer_secret':'',
             'mpesa_passkey':'',
             'mpesa_callback_base_url':'',
-            'mpesa_account_reference_prefix':'KAKA',
-            'mpesa_transaction_desc':'KAKA LIQUOR WINES AND SPIRIT',
+            'mpesa_account_reference_prefix':'MONTEZ',
+            'mpesa_transaction_desc':'MONTEZ LIQUOR',
             'max_payment_transactions':'5',
             'report_default_days':'7',
             'performance_green_threshold_pct':'50',
@@ -248,11 +248,12 @@ class DB:
         t=now_str()
         for k,v in defaults.items():
             c.execute('INSERT OR IGNORE INTO settings(key,value,updated_at,updated_by) VALUES(?,?,?,NULL)',(k,str(v),t))
-        # Brand migration: change only the old built-in defaults; preserve admin-customized values and all transaction data.
-        c.execute("UPDATE settings SET value='KAKA LIQUOR WINES AND SPIRIT',updated_at=? WHERE key='business_name' AND value IN ('MONTEZ LIQUOR','KAKA LIQUOR')",(t,))
-        c.execute("UPDATE settings SET value='KAKA',updated_at=? WHERE key IN ('receipt_prefix','mpesa_account_reference_prefix') AND value='MONTEZ'",(t,))
-        c.execute("UPDATE settings SET value='KAKA LIQUOR WINES AND SPIRIT',updated_at=? WHERE key='mpesa_transaction_desc' AND value='KAKA LIQUOR'",(t,))
-        c.execute("UPDATE permissions SET label='KAKA LIQUOR WINES AND SPIRIT AI Assistant' WHERE key='AI_ASSISTANT' AND label='KAKA LIQUOR AI Assistant'")
+        # MONTEZ rebrand migration: update only legacy built-in KAKA defaults.
+        # Preserve administrator-customized settings and all historical transaction records.
+        c.execute("UPDATE settings SET value='MONTEZ LIQUOR',updated_at=? WHERE key='business_name' AND value IN ('KAKA LIQUOR WINES AND SPIRIT','KAKA LIQUOR')",(t,))
+        c.execute("UPDATE settings SET value='MONTEZ',updated_at=? WHERE key IN ('receipt_prefix','mpesa_account_reference_prefix') AND value='KAKA'",(t,))
+        c.execute("UPDATE settings SET value='MONTEZ LIQUOR',updated_at=? WHERE key='mpesa_transaction_desc' AND value='KAKA LIQUOR WINES AND SPIRIT'",(t,))
+        c.execute("UPDATE permissions SET label='MONTEZ LIQUOR AI Assistant' WHERE key='AI_ASSISTANT' AND label IN ('KAKA LIQUOR WINES AND SPIRIT AI Assistant','KAKA LIQUOR AI Assistant')")
         if not c.execute("SELECT 1 FROM settings WHERE key='management_dashboard_v1'").fetchone():
             c.execute("UPDATE role_permissions SET enabled=1 WHERE role='MANAGEMENT' AND key='VIEW_DASHBOARD'")
             c.execute("INSERT INTO settings(key,value,updated_at,updated_by) VALUES('management_dashboard_v1','1',?,NULL)",(t,))
