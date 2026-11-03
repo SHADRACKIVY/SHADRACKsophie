@@ -3354,7 +3354,7 @@ class Handler(BaseHTTPRequestHandler):
                 snap.close()
 
         with open(dest,'rb') as f: data=f.read()
-        if not data.startswith(b'SQLite format 3\\x00'):
+        if not data.startswith(b'SQLite format 3\x00'):
             try: os.remove(dest)
             except OSError: pass
             raise RuntimeError('The generated backup is not a valid SQLite database.')
