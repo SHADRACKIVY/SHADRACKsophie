@@ -236,7 +236,7 @@ class DB:
             'business_address':'',
             'business_website':'',
             'business_tax_pin':'',
-            'business_branch_name':'Main Branch',
+            'business_branch_name':'',
             'receipt_footer':'Thank you for shopping with us. | Powered by SHADYTECHSOLUTIONS',
             'report_footer':'Powered by SHADYTECHSOLUTIONS',
             'dashboard_enabled':'YES',
