@@ -607,6 +607,84 @@ def record_opening_stock(u, form):
         c.close()
 
 
+def stock_count_adjustment(u, form):
+    require_perm_user(u,'VIEW_STOCK')
+    role=role_name(u)
+    branch_id=int(u.get('branch_id') or 0) if role not in ('ADMIN','MANAGEMENT') else int(form.get('branch_id','0') or 0)
+    product_id=int(form.get('product_id','0') or 0)
+    try: physical=float(form.get('physical_qty','-1'))
+    except Exception: raise ValueError('Enter a valid physical count.')
+    reason=str(form.get('count_reason','')).strip()
+    if not branch_id or product_id<=0 or physical<0 or len(reason)<5: raise ValueError('Select a branch and product, enter a non-negative physical count, and give a reason of at least 5 characters.')
+    c=core.db.c()
+    try:
+        c.execute('BEGIN IMMEDIATE')
+        if not c.execute('SELECT 1 FROM branches WHERE id=? AND active=1',(branch_id,)).fetchone(): raise ValueError('Selected branch is inactive or unavailable.')
+        p=c.execute('SELECT * FROM products WHERE id=? AND active=1',(product_id,)).fetchone()
+        if not p: raise ValueError('Product not found or inactive.')
+        bs=c.execute('SELECT * FROM branch_stock WHERE branch_id=? AND product_id=?',(branch_id,product_id)).fetchone()
+        if not bs: raise ValueError('This product has no stock record for the selected branch.')
+        before=float(bs['qty'] or 0); delta=round(physical-before,3); ts=now()
+        if abs(delta)>0.000001:
+            c.execute('UPDATE branch_stock SET qty=?,updated_at=? WHERE branch_id=? AND product_id=?',(physical,ts,branch_id,product_id))
+            c.execute('INSERT INTO stock_movements(movement_time,user_id,product_id,movement_type,qty,before_qty,after_qty,unit_cost,reference,branch_id) VALUES(?,?,?,?,?,?,?,?,?,?)',(ts,u['id'],product_id,'STOCK_COUNT_ADJUSTMENT',delta,before,physical,float(bs['avg_cost'] or 0),reason,branch_id))
+        c.execute("INSERT INTO audit_log(created_at,user_id,username_snapshot,action,entity,entity_id,details) VALUES(?,?,?,?,?,?,?)",(ts,u['id'],u.get('username',''),'STOCK COUNT','BRANCH STOCK',f'{branch_id}:{product_id}',f'{p["name"]}; system={before:g}; physical={physical:g}; variance={delta:+g}; reason={reason}'))
+        c.commit(); return {'before':before,'physical':physical,'variance':delta,'product':p['name']}
+    except Exception: c.rollback(); raise
+    finally: c.close()
+
+
+def stock_transfer_action(u, form):
+    require_perm_user(u,'VIEW_STOCK')
+    action=str(form.get('action','request')).lower(); role=role_name(u); ts=now()
+    c=core.db.c()
+    try:
+        c.execute('BEGIN IMMEDIATE')
+        if action=='request':
+            source=int(u.get('branch_id') or 0) if role not in ('ADMIN','MANAGEMENT') else int(form.get('source_branch_id','0') or 0)
+            dest=int(form.get('destination_branch_id','0') or 0); pid=int(form.get('product_id','0') or 0)
+            qty=float(form.get('qty','0') or 0); reason=str(form.get('reason','')).strip()
+            if not source or not dest or source==dest or pid<=0 or qty<=0 or len(reason)<5: raise ValueError('Select different source and destination branches, a product, quantity greater than zero, and a reason of at least 5 characters.')
+            if not c.execute('SELECT 1 FROM branches WHERE id=? AND active=1',(source,)).fetchone() or not c.execute('SELECT 1 FROM branches WHERE id=? AND active=1',(dest,)).fetchone(): raise ValueError('Both branches must be active.')
+            bs=c.execute('SELECT * FROM branch_stock WHERE branch_id=? AND product_id=?',(source,pid)).fetchone()
+            if not bs: raise ValueError('Source branch has no stock record for this product.')
+            if qty>float(bs['qty'] or 0): raise ValueError(f'Insufficient source branch stock. Available: {float(bs["qty"] or 0):g}.')
+            no='TRF-'+dt.datetime.now().strftime('%Y%m%d%H%M%S')+'-'+secrets.token_hex(2).upper()
+            c.execute("INSERT INTO stock_transfers(transfer_no,source_branch_id,destination_branch_id,product_id,qty,unit_cost,reason,status,requested_by,created_at) VALUES(?,?,?,?,?,?,?,'PENDING',?,?)",(no,source,dest,pid,qty,float(bs['avg_cost'] or 0),reason,u['id'],ts))
+            core.db.audit(c,u,'REQUEST','STOCK TRANSFER',no,f'{source}->{dest}; product={pid}; qty={qty:g}; reason={reason}')
+            c.commit(); return f'Transfer request {no} submitted for Management approval.'
+        if role not in ('ADMIN','MANAGEMENT'): raise PermissionError('Only Administrator or Management can approve/reject stock transfers.')
+        transfer_id=int(form.get('transfer_id','0') or 0); row=c.execute("SELECT * FROM stock_transfers WHERE id=? AND status='PENDING'",(transfer_id,)).fetchone()
+        if not row: raise ValueError('Pending transfer request not found.')
+        if action=='reject':
+            reason=str(form.get('rejection_reason','')).strip()
+            if len(reason)<5: raise ValueError('Enter a rejection reason of at least 5 characters.')
+            c.execute("UPDATE stock_transfers SET status='REJECTED',approved_by=?,approved_at=?,rejection_reason=? WHERE id=?",(u['id'],ts,reason,transfer_id))
+            core.db.audit(c,u,'REJECT','STOCK TRANSFER',row['transfer_no'],f'reason={reason}')
+            c.commit(); return f'Transfer {row["transfer_no"]} rejected.'
+        if action!='approve': raise ValueError('Unknown stock transfer action.')
+        source=int(row['source_branch_id']); dest=int(row['destination_branch_id']); pid=int(row['product_id']); qty=float(row['qty'])
+        src=c.execute('SELECT * FROM branch_stock WHERE branch_id=? AND product_id=?',(source,pid)).fetchone()
+        if not src or float(src['qty'] or 0)<qty: raise ValueError('Approval blocked: source branch no longer has enough stock.')
+        product=c.execute('SELECT * FROM products WHERE id=? AND active=1',(pid,)).fetchone()
+        if not product: raise ValueError('Product is inactive or missing.')
+        dst=c.execute('SELECT * FROM branch_stock WHERE branch_id=? AND product_id=?',(dest,pid)).fetchone()
+        if not dst:
+            c.execute('INSERT INTO branch_stock(branch_id,product_id,qty,avg_cost,buy_price,sell_price,wholesale_price,reorder_level,updated_at) VALUES(?,?,0,?,?,?,?,?,?)',(dest,pid,float(src['avg_cost'] or 0),float(src['buy_price'] or src['avg_cost'] or 0),float(src['sell_price'] or product['sell_price']),float(src['wholesale_price'] or product['wholesale_price'] or product['sell_price']),float(src['reorder_level'] or product['reorder_level']),ts))
+            dst=c.execute('SELECT * FROM branch_stock WHERE branch_id=? AND product_id=?',(dest,pid)).fetchone()
+        src_before=float(src['qty']); src_after=src_before-qty; dst_before=float(dst['qty']); dst_after=dst_before+qty; cost=float(src['avg_cost'] or row['unit_cost'] or 0)
+        dst_cost=((dst_before*float(dst['avg_cost'] or 0))+(qty*cost))/dst_after if dst_after else cost
+        c.execute('UPDATE branch_stock SET qty=?,updated_at=? WHERE branch_id=? AND product_id=?',(src_after,ts,source,pid))
+        c.execute('UPDATE branch_stock SET qty=?,avg_cost=?,updated_at=? WHERE branch_id=? AND product_id=?',(dst_after,dst_cost,ts,dest,pid))
+        c.execute('INSERT INTO stock_movements(movement_time,user_id,product_id,movement_type,qty,before_qty,after_qty,unit_cost,reference,branch_id) VALUES(?,?,?,?,?,?,?,?,?,?)',(ts,u['id'],pid,'TRANSFER_OUT',-qty,src_before,src_after,cost,row['transfer_no'],source))
+        c.execute('INSERT INTO stock_movements(movement_time,user_id,product_id,movement_type,qty,before_qty,after_qty,unit_cost,reference,branch_id) VALUES(?,?,?,?,?,?,?,?,?,?)',(ts,u['id'],pid,'TRANSFER_IN',qty,dst_before,dst_after,cost,row['transfer_no'],dest))
+        c.execute("UPDATE stock_transfers SET status='APPROVED',approved_by=?,approved_at=? WHERE id=?",(u['id'],ts,transfer_id))
+        core.db.audit(c,u,'APPROVE','STOCK TRANSFER',row['transfer_no'],f'{source}->{dest}; product={product["name"]}; qty={qty:g}; source {src_before:g}->{src_after:g}; destination {dst_before:g}->{dst_after:g}')
+        c.commit(); return f'Transfer {row["transfer_no"]} approved. Stock moved from source to destination.'
+    except Exception: c.rollback(); raise
+    finally: c.close()
+
+
 def admin_set_cost(u, form):
     if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
     pid=int(form.get('product_id','0') or 0); new_cost=float(form.get('new_avg_cost','-1') or -1); reason=form.get('reason','').strip()
