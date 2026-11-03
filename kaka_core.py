@@ -126,6 +126,9 @@ class DB:
         else: main_id=main['id']
         c.execute('UPDATE users SET branch_id=? WHERE branch_id IS NULL',(main_id,))
         c.execute('UPDATE sales SET branch_id=(SELECT u.branch_id FROM users u WHERE u.id=sales.user_id) WHERE branch_id IS NULL')
+        c.execute('UPDATE purchases SET branch_id=(SELECT branch_id FROM users WHERE users.id=purchases.user_id) WHERE branch_id IS NULL')
+        c.execute('UPDATE stock_movements SET branch_id=(SELECT branch_id FROM users WHERE users.id=stock_movements.user_id) WHERE branch_id IS NULL')
+        c.execute('UPDATE expenses SET branch_id=(SELECT branch_id FROM users WHERE users.id=expenses.user_id) WHERE branch_id IS NULL')
         # Ensure every existing and newly created branch has a zeroed row for every catalogue product.
         for br in c.execute('SELECT id FROM branches').fetchall():
             for pr in c.execute('SELECT id,avg_cost,sell_price,wholesale_price,reorder_level FROM products').fetchall():
@@ -609,12 +612,12 @@ def stock_report(start,end,branch_id=None):
     c=db.c()
     if branch_id is None:
         # All-branch view is an explicit company total, not a shared product quantity.
-        ps=c.execute('''SELECT p.*,COALESCE(SUM(bs.qty),0) branch_stock_qty,COALESCE(AVG(bs.avg_cost),p.avg_cost) branch_cost,
+        ps=c.execute('''SELECT p.*,COALESCE(SUM(bs.qty),0) branch_stock_qty,COALESCE(AVG(bs.avg_cost),p.avg_cost) branch_cost,COALESCE(AVG(bs.sell_price),p.sell_price) branch_sell_price,COALESCE(AVG(bs.wholesale_price),p.wholesale_price) branch_wholesale_price,
                         COALESCE(SUM(bs.qty*bs.avg_cost),0) stock_cost_value
                         FROM products p LEFT JOIN branch_stock bs ON bs.product_id=p.id
                         WHERE p.active=1 GROUP BY p.id ORDER BY p.name''').fetchall()
     else:
-        ps=c.execute('''SELECT p.*,COALESCE(bs.qty,0) branch_stock_qty,COALESCE(bs.avg_cost,p.avg_cost) branch_cost,
+        ps=c.execute('''SELECT p.*,COALESCE(bs.qty,0) branch_stock_qty,COALESCE(bs.avg_cost,p.avg_cost) branch_cost,COALESCE(bs.sell_price,p.sell_price) branch_sell_price,COALESCE(bs.wholesale_price,p.wholesale_price) branch_wholesale_price,
                         COALESCE(bs.qty*bs.avg_cost,0) stock_cost_value
                         FROM products p LEFT JOIN branch_stock bs ON bs.product_id=p.id AND bs.branch_id=?
                         WHERE p.active=1 ORDER BY p.name''',(int(branch_id),)).fetchall()
@@ -639,7 +642,7 @@ def stock_report(start,end,branch_id=None):
         opening=float(opening_net or 0); closing=opening+float(pur or 0)-float(sold or 0)+float(adjustments or 0)
         current_qty=float(p['branch_stock_qty'] or 0)
         unit_cost=float(p['branch_cost'] or 0)
-        out.append({'sku':p['sku'],'name':p['name'],'category':p['category'],'stock':current_qty,'opening':opening,'purchased':pur,'sold':sold,'adjustments':float(adjustments or 0),'closing':closing,'sell_price':p['sell_price'],'retail_price':p['sell_price'],'wholesale_price':p['wholesale_price'],'avg_cost':unit_cost,'stock_value':current_qty*unit_cost,'retail_units':float(split['retail_units'] or 0),'wholesale_units':float(split['wholesale_units'] or 0),'retail_revenue':float(split['retail_revenue'] or 0),'wholesale_revenue':float(split['wholesale_revenue'] or 0),'reorder_level':p['reorder_level'],'status':'OUT OF STOCK' if current_qty<=0 else ('LOW STOCK' if current_qty<=p['reorder_level'] else 'OK')})
+        out.append({'sku':p['sku'],'name':p['name'],'category':p['category'],'stock':current_qty,'opening':opening,'purchased':pur,'sold':sold,'adjustments':float(adjustments or 0),'closing':closing,'sell_price':p['branch_sell_price'],'retail_price':p['branch_sell_price'],'wholesale_price':p['branch_wholesale_price'],'avg_cost':unit_cost,'stock_value':current_qty*unit_cost,'retail_units':float(split['retail_units'] or 0),'wholesale_units':float(split['wholesale_units'] or 0),'retail_revenue':float(split['retail_revenue'] or 0),'wholesale_revenue':float(split['wholesale_revenue'] or 0),'reorder_level':p['reorder_level'],'status':'OUT OF STOCK' if current_qty<=0 else ('LOW STOCK' if current_qty<=p['reorder_level'] else 'OK')})
     for r in out:
         unit_total=r['retail_units']+r['wholesale_units']; rev_total=r['retail_revenue']+r['wholesale_revenue']
         r['retail_units_pct']=100*r['retail_units']/unit_total if unit_total else 0
