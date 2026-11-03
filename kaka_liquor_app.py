@@ -1783,7 +1783,7 @@ def export_report_v2(handler, u, qs):
         title='MONTEZ LIQUOR PURCHASE REPORT'
     else:
         raise ValueError('Unknown report type.')
-    st=core.get_settings(); title=f"{st.get('business_name',APP_NAME)} · {st.get('business_branch_name','')} · {title}"
+    st=core.get_settings(); title=f"{st.get('business_name',APP_NAME)} · {st.get('business_branch_name','')} · {title} · PERIOD {start} TO {end}"
     out,ctype,fn=_export_rows(title,headers,data,fmt)
     return send_file(handler,out,ctype,fn)
 
@@ -1792,7 +1792,7 @@ def export_ledger_v2(handler,u,qs):
     start=_qsval(qs,'start'); end=_qsval(qs,'end'); fmt=_qsval(qs,'format','xlsx').lower()
     if not start or not end: raise ValueError('Report period is missing.')
     bid=branch_scope_for(u,qs); rows=core.ledger_data(start,end,bid); headers=['Date & Time','Reference','Description','Debit Account','Debit','Credit Account','Credit']
-    st=core.get_settings(); out,ctype,fn=_export_rows(f"{st.get('business_name',APP_NAME)} · {st.get('business_branch_name','')} · GENERAL LEDGER",headers,rows,fmt); return send_file(handler,out,ctype,fn)
+    st=core.get_settings(); out,ctype,fn=_export_rows(f"{st.get('business_name',APP_NAME)} · {st.get('business_branch_name','')} · GENERAL LEDGER · PERIOD {start} TO {end}",headers,rows,fmt); return send_file(handler,out,ctype,fn)
 
 def export_pl_v2(handler,u,qs):
     require_perm_user(u,'VIEW_LEDGER'); require_perm_user(u,'PRINT_EXPORT')
@@ -1813,7 +1813,7 @@ def export_pl_v2(handler,u,qs):
         ['Sale Lines Reviewed',int(d['cogs_lines']),None,'Total sale lines included in COGS coverage review']
     ]
     headers=['Profit & Loss Statement','Amount (KES)','% of Sales Revenue','Calculation / Management Note']
-    st=core.get_settings(); out,ctype,fn=_export_rows(f"{st.get('business_name',APP_NAME)} · {st.get('business_branch_name','')} · PROFIT AND LOSS",headers,rows,fmt); return send_file(handler,out,ctype,fn)
+    st=core.get_settings(); out,ctype,fn=_export_rows(f"{st.get('business_name',APP_NAME)} · {st.get('business_branch_name','')} · PROFIT AND LOSS · PERIOD {start} TO {end}",headers,rows,fmt); return send_file(handler,out,ctype,fn)
 
 def mpesa_test_connection(u):
     if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
