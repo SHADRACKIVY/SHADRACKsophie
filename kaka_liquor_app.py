@@ -1758,9 +1758,12 @@ def mpesa_confirm_direct_payment(u, form):
         return {'ok':True,'sale_id':d['sale_id'],'receipt_no':d['receipt_no'],'matched':accumulated,'remaining':0.0,'transactions':[dict(r) for r in selected]}
     finally: c.close()
 
-def mpesa_stk_status(checkout):
-    c=core.db.c(); r=c.execute('SELECT checkout_request_id,status,mpesa_code,amount,phone,transaction_date,sale_id FROM mpesa_stk_requests WHERE checkout_request_id=?',(checkout,)).fetchone(); c.close();
+def mpesa_stk_status(checkout,u=None,query=None):
+    c=core.db.c(); r=c.execute('SELECT checkout_request_id,status,mpesa_code,amount,phone,transaction_date,sale_id,branch_id FROM mpesa_stk_requests WHERE checkout_request_id=?',(checkout,)).fetchone(); c.close()
     if not r: return {'status':'NOT_FOUND'}
+    if u:
+        bid=branch_scope_for(u,query)
+        if bid is not None and int(r['branch_id'] or 0)!=int(bid): return {'status':'NOT_FOUND'}
     d=dict(r); d['auto_saved']=bool(d.get('sale_id'))
     return d
 
@@ -2332,7 +2335,7 @@ class Handler(BaseHTTPRequestHandler):
             if not u: return redirect(self,'/login')
             billing=subscription_billing_state()
             if billing.get('suspended') and role_name(u)!='ADMIN': return send_html(self,subscription_block_page(billing),402)
-            if path=='/api/mpesa/stk-status': return send_json(self,mpesa_stk_status(_qsval(qs,'checkout_request_id')))
+            if path=='/api/mpesa/stk-status': return send_json(self,mpesa_stk_status(_qsval(qs,'checkout_request_id'),u,qs))
             if path=='/api/mpesa/live-messages': return send_json(self,mpesa_live_messages_json(u,qs))
             if path=='/mpesa/monitor': return send_html(self,mpesa_monitor_page(u))
             if path=='/mpesa/recovery': return send_html(self,mpesa_recovery_page(u))
