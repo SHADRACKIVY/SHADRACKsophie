@@ -21,7 +21,7 @@ jobs:
           import os, shutil
           shutil.rmtree(os.environ['KAKA_DATA_DIR'], ignore_errors=True)
           import kaka_core as core
-          from kaka_liquor_app import save_user, admin_edit_user, layout
+          from kaka_liquor_app import save_user, admin_edit_user, layout, products_page
           c=core.db.c()
           ts=core.now_str()
           bid=c.execute("INSERT INTO branches(name,code,created_at,updated_at) VALUES(?,?,?,?)",("Role Test Branch","ROLE-01",ts,ts)).lastrowid
@@ -38,10 +38,12 @@ jobs:
               pass
           manager_id=save_user(admin,{"username":"ci_role_manager","full_name":"CI Role Manager","password":"manager-test-pass","role":"MANAGEMENT","branch_id":""})
           sales_id=save_user(admin,{"username":"ci_role_sales","full_name":"CI Role Sales","password":"sales-test-pass","role":"SALES","branch_id":str(bid)})
-          core.update_permissions(admin,{"roles":{"MANAGEMENT":{"VIEW_STOCK":True,"VIEW_REPORTS":False,"MANAGE_SETTINGS":True},"SALES":{"CREATE_SALE":True,"MANAGE_USERS":True}},"users":{}})
+          core.update_permissions(admin,{"roles":{"MANAGEMENT":{"VIEW_STOCK":True,"VIEW_REPORTS":False,"MANAGE_SETTINGS":True,"MANAGE_PRODUCTS":True},"SALES":{"CREATE_SALE":True,"MANAGE_USERS":True}},"users":{}})
           manager={"id":manager_id,"username":"ci_role_manager","full_name":"CI Role Manager","access_role":"MANAGEMENT","role":"SALES","branch_id":None}
           sales={"id":sales_id,"username":"ci_role_sales","full_name":"CI Role Sales","access_role":"SALES","role":"SALES","branch_id":bid}
           assert core.effective_permissions(manager)["VIEW_STOCK"] is True
+          assert core.effective_permissions(manager)["MANAGE_PRODUCTS"] is True
+          assert "SAVE PRODUCT" in products_page(manager,query={"branch_id":str(bid)})
           assert core.effective_permissions(manager)["VIEW_REPORTS"] is False
           assert core.effective_permissions(manager)["MANAGE_SETTINGS"] is False
           assert core.effective_permissions(sales)["CREATE_SALE"] is True
