@@ -514,44 +514,36 @@ def admin_update_product(u, form):
 
 
 def admin_bulk_update_product_costs_prices(u, form):
-    """Save all product retail/wholesale prices, average costs and reorder levels in one audited transaction."""
-    if role_name(u) != 'ADMIN':
-        raise PermissionError('Administrator permission required.')
-    # Admin saves should be one-click; record a default audit reason when none is entered.
-    reason = str(form.get('bulk_reason', '')).strip() or 'Administrator one-click stock update'
-    c = core.db.c()
-    changed = 0
+    """Update cost, retail/wholesale prices and reorder threshold for one selected branch only."""
+    if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
+    branch_id=int(form.get('branch_id','0') or 0)
+    reason=str(form.get('bulk_reason','')).strip() or 'Administrator branch-specific stock update'
+    c=core.db.c(); changed=0
     try:
         c.execute('BEGIN IMMEDIATE')
-        products = c.execute('SELECT * FROM products ORDER BY id').fetchall()
-        ts = now()
+        if not branch_id or not c.execute('SELECT 1 FROM branches WHERE id=? AND active=1',(branch_id,)).fetchone():
+            raise ValueError('Select an active branch before saving branch-specific prices and COGS.')
+        products=c.execute('SELECT * FROM products ORDER BY id').fetchall(); ts=now()
         for p in products:
-            pid = int(p['id'])
-            retail = float(form.get(f'bulk_sell_{pid}', p['sell_price']) or 0)
-            wholesale = float(form.get(f'bulk_wholesale_{pid}', p['wholesale_price'] if p['wholesale_price'] is not None else p['sell_price']) or 0)
-            cost = float(form.get(f'bulk_cost_{pid}', p['avg_cost']) or 0)
-            reorder = float(form.get(f'bulk_reorder_{pid}', p['reorder_level']) or 0)
-            if retail <= 0 or wholesale <= 0 or cost < 0 or reorder < 0:
-                raise ValueError(f'Invalid retail/wholesale price, COGS or reorder level for {p["name"]}. Prices must be positive; COGS and reorder level cannot be negative.')
-            old_retail = float(p['sell_price'] or 0)
-            old_wholesale = float(p['wholesale_price'] if p['wholesale_price'] is not None else old_retail)
-            old_cost = float(p['avg_cost'] or 0)
-            old_reorder = float(p['reorder_level'] or 0)
-            if (abs(retail-old_retail) > 1e-9 or abs(wholesale-old_wholesale) > 1e-9 or abs(cost-old_cost) > 1e-9 or abs(reorder-old_reorder) > 1e-9):
-                c.execute('UPDATE products SET sell_price=?,wholesale_price=?,avg_cost=?,reorder_level=?,updated_at=? WHERE id=?', (retail, wholesale, cost, reorder, ts, pid))
-                if abs(cost-old_cost) > 1e-9:
-                    qty = float(p['stock_qty'] or 0)
-                    c.execute('INSERT INTO stock_movements(movement_time,user_id,product_id,movement_type,qty,before_qty,after_qty,unit_cost,reference) VALUES(?,?,?,?,?,?,?,?,?)', (ts,u['id'],pid,'COST_ADJUSTMENT',0,qty,qty,cost,reason))
-                core.db.audit(c,u,'BULK UPDATE','PRODUCT',pid,
-                    f'{p["product_no"] or pid} {p["name"]}; retail {old_retail:.2f}->{retail:.2f}; wholesale {old_wholesale:.2f}->{wholesale:.2f}; avg_cost {old_cost:.2f}->{cost:.2f}; reorder {old_reorder:g}->{reorder:g}; reason={reason}')
-                changed += 1
-        c.commit()
-        return changed
+            pid=int(p['id']); bs=c.execute('SELECT * FROM branch_stock WHERE branch_id=? AND product_id=?',(branch_id,pid)).fetchone()
+            if not bs: raise ValueError(f'Missing branch stock row for {p["name"]}; refresh stock setup before saving.')
+            retail=float(form.get(f'bulk_sell_{pid}',bs['sell_price']) or 0)
+            wholesale=float(form.get(f'bulk_wholesale_{pid}',bs['wholesale_price'] if bs['wholesale_price'] is not None else retail) or 0)
+            cost=float(form.get(f'bulk_cost_{pid}',bs['avg_cost']) or 0)
+            reorder=float(form.get(f'bulk_reorder_{pid}',bs['reorder_level']) or 0)
+            if retail<=0 or wholesale<=0 or cost<0 or reorder<0: raise ValueError(f'Invalid price, COGS or reorder level for {p["name"]}.')
+            old_retail=float(bs['sell_price'] or 0); old_wholesale=float(bs['wholesale_price'] or 0); old_cost=float(bs['avg_cost'] or 0); old_reorder=float(bs['reorder_level'] or 0)
+            if abs(retail-old_retail)>1e-9 or abs(wholesale-old_wholesale)>1e-9 or abs(cost-old_cost)>1e-9 or abs(reorder-old_reorder)>1e-9:
+                c.execute('UPDATE branch_stock SET sell_price=?,wholesale_price=?,avg_cost=?,buy_price=?,reorder_level=?,updated_at=? WHERE branch_id=? AND product_id=?',(retail,wholesale,cost,cost,reorder,ts,branch_id,pid))
+                if abs(cost-old_cost)>1e-9:
+                    qty=float(bs['qty'] or 0)
+                    c.execute('INSERT INTO stock_movements(movement_time,user_id,product_id,movement_type,qty,before_qty,after_qty,unit_cost,reference,branch_id) VALUES(?,?,?,?,?,?,?,?,?,?)',(ts,u['id'],pid,'COST_ADJUSTMENT',0,qty,qty,cost,reason,branch_id))
+                core.db.audit(c,u,'BRANCH PRICE/COGS UPDATE','BRANCH STOCK',f'{branch_id}:{pid}',f'{p["name"]}; retail {old_retail:.2f}->{retail:.2f}; wholesale {old_wholesale:.2f}->{wholesale:.2f}; avg_cost {old_cost:.2f}->{cost:.2f}; reorder {old_reorder:g}->{reorder:g}; reason={reason}')
+                changed+=1
+        c.commit(); return changed
     except Exception:
-        c.rollback()
-        raise
-    finally:
-        c.close()
+        c.rollback(); raise
+    finally: c.close()
 
 def admin_set_stock(u, form):
     if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
@@ -1300,44 +1292,48 @@ def live_page(u):
     content=f'''<section class="card"><div class="section-head"><h2>Live Monitoring</h2><span class="pill">AUTO REFRESH</span></div><div class="grid four"><div class="card metric"><div class="muted">ACTIVE USERS</div><div class="v">{d['active_users']}</div></div><div class="card metric"><div class="muted">TODAY SALES</div><div class="v">{money(d['today_sales'])}</div></div><div class="card metric"><div class="muted">PURCHASES</div><div class="v">{money(d['today_purchases'])}</div></div><div class="card metric"><div class="muted">EXPENSES</div><div class="v">{money(d['today_expenses'])}</div></div><div class="card metric"><div class="muted">M-PESA</div><div class="v">{money(d['mpesa'])}</div></div></div></section><section class="card mpesa-live-card" style="margin-top:14px"><div class="mpesa-live-head"><div><h3 style="margin:0">Live M-Pesa Messages</h3><div class="muted">Incoming Till 1546252 payments and STK updates · refreshed automatically</div></div><span class="pill">LIVE</span></div><div id="mpesa-live-messages">{mpesa_live_messages_html(mp_live)}</div></section><div class="grid two" style="margin-top:14px"><section class="card"><div class="section-head"><h3>Recent Sales</h3><a class="btn" href="/live">REFRESH</a></div>{html_table(['Time','Receipt','Customer','Total','By'],[[esc(r['sold_at']),esc(r['receipt_no']),esc(r['customer']),money(r['total']),esc(r['user_name'])] for r in d['recent_sales']])}</section><section class="card"><h3>Recent Purchases</h3>{html_table(['Time','Purchase','Supplier','Total','By'],[[esc(r['purchased_at']),esc(r['purchase_no']),esc(r['supplier']),money(r['total']),esc(r['user_name'])] for r in d['recent_purchases']])}</section></div>'''; return layout(u,'Live Monitoring',content,'/live')
 
 
-def products_page(u, message=''):
+def products_page(u, message='', query=None):
     role=role_name(u)
     if role not in ('ADMIN','SALES') or not allowed(u,'MANAGE_PRODUCTS'):
         raise PermissionError('Product Registration is disabled for your account. Contact Administrator.')
-    c=core.db.c(); branch_id=int(u.get('branch_id') or 0)
-    if not branch_id:
-        br=c.execute('SELECT id FROM branches WHERE active=1 ORDER BY id LIMIT 1').fetchone(); branch_id=br['id'] if br else 0
-    rows=[dict(r) for r in c.execute('''SELECT p.*,COALESCE(bs.qty,0) branch_qty,COALESCE(bs.avg_cost,p.avg_cost) branch_cost FROM products p LEFT JOIN branch_stock bs ON bs.product_id=p.id AND bs.branch_id=? ORDER BY p.active DESC,p.name''',(branch_id,)).fetchall()]; branches=[dict(x) for x in c.execute('SELECT id,name FROM branches WHERE active=1 ORDER BY name').fetchall()]; c.close()
+    c=core.db.c(); branches=[dict(x) for x in c.execute('SELECT id,name FROM branches WHERE active=1 ORDER BY name').fetchall()]
+    if role=='ADMIN':
+        raw=_qsval(query or {},'branch_id',''); branch_id=int(raw) if str(raw).isdigit() else 0
+        if branch_id and not any(int(b['id'])==branch_id for b in branches): c.close(); raise PermissionError('Selected branch is unavailable.')
+    else: branch_id=int(u.get('branch_id') or 0)
+    rows=[dict(r) for r in c.execute('''SELECT p.*,COALESCE(bs.qty,0) branch_qty,COALESCE(bs.avg_cost,p.avg_cost) branch_cost,COALESCE(bs.sell_price,p.sell_price) branch_sell_price,COALESCE(bs.wholesale_price,p.wholesale_price) branch_wholesale_price,COALESCE(bs.reorder_level,p.reorder_level) branch_reorder FROM products p LEFT JOIN branch_stock bs ON bs.product_id=p.id AND bs.branch_id=? ORDER BY p.active DESC,p.name''',(branch_id,)).fetchall()]; c.close()
     notice=f'<div class="flash error">{esc(message)}</div>' if message else ''
     if role=='ADMIN':
         price_rows=[]; action_rows=[]
         for r in rows:
-            pid=r['id']; wholesale_value=r.get('wholesale_price') if r.get('wholesale_price') is not None else r['sell_price']
+            pid=r['id']; wholesale_value=r.get('branch_wholesale_price') if r.get('branch_wholesale_price') is not None else r['branch_sell_price']
             price_rows.append([
                 esc(r['name']), esc(r['sku']),
-                f'<input aria-label="Retail price for {esc(r["name"])}" name="bulk_sell_{pid}" type="number" min="0.01" step="0.01" value="{float(r["sell_price"] or 0):.2f}" required style="width:120px">',
+                f'<input aria-label="Retail price for {esc(r["name"])}" name="bulk_sell_{pid}" type="number" min="0.01" step="0.01" value="{float(r["branch_sell_price"] or 0):.2f}" required style="width:120px">',
                 f'<input aria-label="Wholesale price for {esc(r["name"])}" name="bulk_wholesale_{pid}" type="number" min="0.01" step="0.01" value="{float(wholesale_value or 0):.2f}" required style="width:120px">',
-                f'<input aria-label="COGS unit cost for {esc(r["name"])}" name="bulk_cost_{pid}" type="number" min="0" step="0.01" value="{float(r["avg_cost"] or 0):.2f}" required style="width:120px">',
+                f'<input aria-label="COGS unit cost for {esc(r["name"])}" name="bulk_cost_{pid}" type="number" min="0" step="0.01" value="{float(r["branch_cost"] or 0):.2f}" required style="width:120px">',
                 r['branch_qty'], money(float(r['branch_qty'] or 0)*float(r['branch_cost'] or 0)),
-                f'<input aria-label="Reorder level for {esc(r["name"])}" name="bulk_reorder_{pid}" type="number" min="0" step="1" value="{float(r["reorder_level"] or 0):g}" required style="width:90px">',
+                f'<input aria-label="Reorder level for {esc(r["name"])}" name="bulk_reorder_{pid}" type="number" min="0" step="1" value="{float(r["branch_reorder"] or 0):g}" required style="width:90px">',
                 'ACTIVE' if r['active'] else 'ARCHIVED'
             ])
             stock=f'''<form method="post" action="/products" class="inline-actions">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="stock"><input type="hidden" name="product_id" value="{pid}"><input name="new_stock" aria-label="New stock quantity" type="number" step="1" min="0" value="{r['branch_qty']}" required style="width:90px"><input type="hidden" name="branch_id" value="{branch_id}"><input name="reason" placeholder="Stock correction reason" required minlength="5" style="width:180px"><button class="btn">ADJUST STOCK</button></form>'''
             action_btn=f'''<form method="post" action="/products" class="inline-actions" onsubmit="return confirm('Archive this product? Historical records will be preserved.');">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="delete"><input type="hidden" name="product_id" value="{pid}"><input name="reason" placeholder="Reason required" required minlength="5" style="width:180px"><button class="btn danger">ARCHIVE</button></form>''' if r['active'] else f'''<form method="post" action="/products" class="inline-actions">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="restore"><input type="hidden" name="product_id" value="{pid}"><input name="reason" placeholder="Reason required" required minlength="5" style="width:180px"><button class="btn">RESTORE</button></form>'''
             action_rows.append([esc(r['name']),stock,action_btn])
-        bulk_table=html_table(['Product','SKU','Retail Price','Wholesale Price','COGS / Unit Cost','Shared Stock','Stock Value at Cost','Reorder Level','Status'],price_rows,'No products registered.')
+        bulk_table=html_table(['Product','SKU','Retail Price','Wholesale Price','COGS / Unit Cost','Branch Stock','Stock Value at Cost','Reorder Level','Status'],price_rows,'No products registered.')
         action_table=html_table(['Product','Stock Quantity Adjustment','Archive / Restore'],action_rows,'No products registered.')
-        extra=f'''<section class="card" style="margin-top:14px"><div class="notice"><b>QUICK STOCK EDIT:</b> Edit any number of retail prices, wholesale prices, COGS/unit costs and reorder levels, then click SAVE ALL STOCK CHANGES once. No confirmation or reason is required; the system records an automatic audit note. Stock quantities are preserved and adjusted separately.</div><form method="post" action="/products" id="bulk-stock-edit">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="bulk_save">{bulk_table}<div class="actions" style="margin-top:14px"><button class="btn gold" type="submit">SAVE ALL STOCK CHANGES</button><button class="btn" type="reset">CANCEL UNSAVED CHANGES</button></div></form><h3 style="margin-top:24px">Separate Stock Quantity / Product Status Actions</h3><p class="muted">Use these only when you need to correct physical stock or archive/restore a product. They require their own reason to preserve the stock audit trail.</p>{action_table}</section>'''
-        title='Product Registration & Bulk Stock Editor'; subtitle='Edit many products and save once'
+        extra=f'''<section class="card" style="margin-top:14px"><div class="notice"><b>QUICK STOCK EDIT:</b> Edit any number of retail prices, wholesale prices, COGS/unit costs and reorder levels, then click SAVE ALL STOCK CHANGES once. No confirmation or reason is required; the system records an automatic audit note. Stock quantities are preserved and adjusted separately.</div><form method="post" action="/products" id="bulk-stock-edit">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="bulk_save"><input type="hidden" name="branch_id" value="{branch_id}">{bulk_table}<div class="actions" style="margin-top:14px"><button class="btn gold" type="submit">SAVE ALL STOCK CHANGES</button><button class="btn" type="reset">CANCEL UNSAVED CHANGES</button></div></form><h3 style="margin-top:24px">Separate Stock Quantity / Product Status Actions</h3><p class="muted">Use these only when you need to correct physical stock or archive/restore a product. They require their own reason to preserve the stock audit trail.</p>{action_table}</section>'''
+        title='Product Registration & Branch Stock Editor'; subtitle='Edit costs and prices for the selected branch'
     else:
         table=html_table(['Product Name','SKU','Category','Unit','Retail / Wholesale Price','Stock','Reorder','Status'],[[esc(r['name']),esc(r['sku']),esc(r['category']),esc(r['unit']),money(r['sell_price'])+' / '+money(r.get('wholesale_price') or r['sell_price']),r['branch_qty'],r['reorder_level'],'ACTIVE' if r['active'] else 'ARCHIVED'] for r in rows])
         extra=f'<section class="card" style="margin-top:14px"><div class="notice">Sales Person can register products with separate retail and wholesale prices. Both prices draw from the same shared stock; existing prices and stock costs can only be changed by the Administrator.</div>{table}</section>'
         title='Product Registration'; subtitle='Sales Person product registration access'
     product_opening_opts=''.join(f'<option value="{r["id"]}">{esc(r["name"])} · {esc(r["sku"])}</option>' for r in rows if r['active'])
-    branch_opening_opts=''.join(f'<option value="{b["id"]}" {"selected" if int(b["id"])==branch_id else ""}>{esc(b["name"])}</option>' for b in branches) if role=='ADMIN' else f'<input type="hidden" name="branch_id" value="{branch_id}">'
+    branch_opening_opts=('<option value="">Select branch</option>'+''.join(f'<option value="{b["id"]}" {"selected" if int(b["id"])==branch_id else ""}>{esc(b["name"])}</option>' for b in branches)) if role=='ADMIN' else f'<input type="hidden" name="branch_id" value="{branch_id}">'
     branch_opening_field=f'<div><label>Branch</label><select name="branch_id" required>{branch_opening_opts}</select></div>' if role=='ADMIN' else branch_opening_opts
+    product_branch_field=f'<div><label>Opening Stock Branch *</label><select name="branch_id" required>{branch_opening_opts}</select></div>' if role=='ADMIN' else f'<input type="hidden" name="branch_id" value="{branch_id}">'
+    product_branch_selector=branch_scope_selector(u,{'branch_id':str(branch_id) if branch_id else ''},'/products') if role=='ADMIN' else ''
     opening_form=f'''<section class="card" style="margin-top:14px"><h3>Opening Stock — Existing Product in a Branch</h3><p class="muted">Enter the physically counted stock for a product in this branch once. The system will keep each branch balance separate.</p><form method="post" action="/products">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="opening"><div class="form-grid"><div><label>Product</label><select name="product_id" required>{product_opening_opts}</select></div>{branch_opening_field}<div><label>Physical Opening Quantity</label><input type="number" name="opening_qty" min="0.001" step="0.001" required></div><div><label>Unit Cost</label><input type="number" name="opening_cost" min="0.01" step="0.01" required></div><div><label>Reason / Stock Take Reference</label><input name="opening_reason" minlength="5" required placeholder="Physical opening stock count"></div></div><button class="btn gold" style="margin-top:12px">SAVE BRANCH OPENING STOCK</button></form></section>'''
-    content=f'''{notice}<section class="card"><div class="section-head"><h2>{esc(title)}</h2><span class="pill">{esc(u['full_name'])} · {esc(role_display(role))}</span></div><form method="post" action="/products"><div class="form-grid">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="create"><div><label>SKU *</label><div class="scan-inline"><div><input name="sku" id="product_sku" required></div><button type="button" class="btn scan-btn" onclick="openScannerFill('product_sku')">SCAN</button></div></div><div><label>Product Name *</label><input name="name" required></div><div><label>Category *</label><input name="category" placeholder="Wine, Spirit, Beer..." required></div><div><label>Unit</label><input name="unit" value="{esc(core.get_setting('default_unit','bottle'))}" required></div><div><label>Retail Selling Price</label><input type="number" name="sell_price" min="0.01" step="0.01" required></div><div><label>Wholesale Selling Price</label><input type="number" name="wholesale_price" min="0.01" step="0.01" required><small class="muted">Both prices use the same shared stock.</small></div><div><label>Opening Stock</label><input type="number" name="stock_qty" min="0" step="1" required></div><div><label>COGS / Unit Cost (KSh) — Cost of Goods Sold *</label><input type="number" name="cogs_unit_cost" min="0" step="0.01" value="0" required><small class="muted">Enter the cost you pay per unit. Required to calculate accurate profit and COGS.</small></div><div><label>Reorder Level</label><input type="number" name="reorder_level" min="0" step="1" value="{esc(core.get_setting('default_reorder_level','5'))}" required></div></div><div class="actions" style="margin-top:14px"><button class="btn gold" type="submit">SAVE PRODUCT</button></div></form></section>{opening_form}{extra}'''
+    content=f'''{product_branch_selector}{notice}<section class="card"><div class="section-head"><h2>{esc(title)}</h2><span class="pill">{esc(u['full_name'])} · {esc(role_display(role))}</span></div><form method="post" action="/products"><div class="form-grid">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="create">{product_branch_field}<div><label>SKU *</label><div class="scan-inline"><div><input name="sku" id="product_sku" required></div><button type="button" class="btn scan-btn" onclick="openScannerFill('product_sku')">SCAN</button></div></div><div><label>Product Name *</label><input name="name" required></div><div><label>Category *</label><input name="category" placeholder="Wine, Spirit, Beer..." required></div><div><label>Unit</label><input name="unit" value="{esc(core.get_setting('default_unit','bottle'))}" required></div><div><label>Retail Selling Price</label><input type="number" name="sell_price" min="0.01" step="0.01" required></div><div><label>Wholesale Selling Price</label><input type="number" name="wholesale_price" min="0.01" step="0.01" required><small class="muted">Both prices use the same shared stock.</small></div><div><label>Opening Stock</label><input type="number" name="stock_qty" min="0" step="1" required></div><div><label>COGS / Unit Cost (KSh) — Cost of Goods Sold *</label><input type="number" name="cogs_unit_cost" min="0" step="0.01" value="0" required><small class="muted">Enter the cost you pay per unit. Required to calculate accurate profit and COGS.</small></div><div><label>Reorder Level</label><input type="number" name="reorder_level" min="0" step="1" value="{esc(core.get_setting('default_reorder_level','5'))}" required></div></div><div class="actions" style="margin-top:14px"><button class="btn gold" type="submit">SAVE PRODUCT</button></div></form></section>{opening_form}{extra}'''
     return layout(u,title,content,'/products',subtitle)
 
 def users_page(u, message=''):
