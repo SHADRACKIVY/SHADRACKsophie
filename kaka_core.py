@@ -278,6 +278,10 @@ class DB:
             'ai_base_url':'https://api.openai.com/v1/responses',
             'ai_api_key':'',
             'mpesa_recovery_match_window_minutes':'1440',
+            'subscription_first_month':'2026-12',
+            'subscription_due_day':'5',
+            'subscription_paybill':'516600',
+            'subscription_account':'319851',
             'business_logo_filename':'',
             'role_admin_label':'ADMINISTRATOR / DEVELOPER',
             'role_management_label':'MANAGEMENT',
@@ -340,7 +344,7 @@ def update_settings(u, values):
     change_reason=str(values.get('change_reason','')).strip()
     if len(change_reason)<5:
         raise ValueError('A reason of at least 5 characters is required for every Administrator Settings change.')
-    allowed={'business_name','business_subtitle','business_phone','business_address','business_website','business_tax_pin','business_branch_name','receipt_footer','report_footer','dashboard_enabled','currency','idle_timeout_seconds','idle_timeout_minutes','live_refresh_seconds','default_reorder_level','default_unit','default_payment_transactions','receipt_prefix','allow_credit_sales','require_mpesa_code','max_payment_transactions','report_default_days','mpesa_recovery_match_window_minutes','business_logo_filename','mpesa_enabled','mpesa_environment','mpesa_shortcode','mpesa_shortcode_type','mpesa_consumer_key','mpesa_consumer_secret','mpesa_passkey','mpesa_callback_base_url','mpesa_account_reference_prefix','mpesa_transaction_desc','role_admin_label','role_management_label','role_sales_label','nav_dashboard','nav_sales','nav_sales_dashboard','nav_purchases','nav_expenses','nav_customers','nav_reports','nav_stock_report','nav_reorder_report','nav_live','nav_products','nav_users','nav_settings','nav_ledger','nav_profit_loss','nav_expense_report','nav_backup','nav_audit','report_end_day','report_end_week','report_today','report_this_week','report_monthly','report_this_month','report_last_month','report_this_year','report_last_year','performance_green_threshold_pct','performance_basis','ai_assistant_enabled','ai_provider','ai_model','ai_base_url','ai_api_key','subscription_monthly_amount'}
+    allowed={'business_name','business_subtitle','business_phone','business_address','business_website','business_tax_pin','business_branch_name','receipt_footer','report_footer','dashboard_enabled','currency','idle_timeout_seconds','idle_timeout_minutes','live_refresh_seconds','default_reorder_level','default_unit','default_payment_transactions','receipt_prefix','allow_credit_sales','require_mpesa_code','max_payment_transactions','report_default_days','mpesa_recovery_match_window_minutes','business_logo_filename','mpesa_enabled','mpesa_environment','mpesa_shortcode','mpesa_shortcode_type','mpesa_consumer_key','mpesa_consumer_secret','mpesa_passkey','mpesa_callback_base_url','mpesa_account_reference_prefix','mpesa_transaction_desc','role_admin_label','role_management_label','role_sales_label','nav_dashboard','nav_sales','nav_sales_dashboard','nav_purchases','nav_expenses','nav_customers','nav_reports','nav_stock_report','nav_reorder_report','nav_live','nav_products','nav_users','nav_settings','nav_ledger','nav_profit_loss','nav_expense_report','nav_backup','nav_audit','report_end_day','report_end_week','report_today','report_this_week','report_monthly','report_this_month','report_last_month','report_this_year','report_last_year','performance_green_threshold_pct','performance_basis','subscription_first_month','subscription_due_day','subscription_paybill','subscription_account','ai_assistant_enabled','ai_provider','ai_model','ai_base_url','ai_api_key','subscription_monthly_amount'}
     c=db.c(); t=now_str()
     try:
         c.execute('BEGIN')
@@ -351,7 +355,7 @@ def update_settings(u, values):
             oldrow=c.execute('SELECT value FROM settings WHERE key=?',(k,)).fetchone()
             oldvalue=oldrow['value'] if oldrow else ''
             if oldvalue != vv: changed_keys.append(k)
-            if k in ('idle_timeout_seconds','idle_timeout_minutes','live_refresh_seconds','default_reorder_level','default_payment_transactions','max_payment_transactions','report_default_days','performance_green_threshold_pct','mpesa_recovery_match_window_minutes'):
+            if k in ('idle_timeout_seconds','idle_timeout_minutes','live_refresh_seconds','default_reorder_level','default_payment_transactions','max_payment_transactions','report_default_days','performance_green_threshold_pct','mpesa_recovery_match_window_minutes','subscription_due_day'):
                 n=int(float(vv))
                 if k=='idle_timeout_seconds' and not 30<=n<=7200: raise ValueError('Idle timeout must be between 30 and 7200 seconds.')
                 if k=='idle_timeout_minutes' and not 1<=n<=120: raise ValueError('Idle logout must be between 1 and 120 minutes.')
@@ -361,11 +365,14 @@ def update_settings(u, values):
                 if k=='report_default_days' and not 1<=n<=365: raise ValueError('Report default days must be between 1 and 365.')
                 if k=='performance_green_threshold_pct' and not 1<=n<=100: raise ValueError('Performance threshold must be between 1 and 100 percent.')
                 if k=='mpesa_recovery_match_window_minutes' and not 5<=n<=10080: raise ValueError('M-Pesa recovery match window must be between 5 and 10080 minutes.')
+                if k=='subscription_due_day' and not 1<=n<=28: raise ValueError('Subscription due day must be between 1 and 28.')
                 vv=str(n)
                 if k=='idle_timeout_minutes':
                     c.execute('INSERT INTO settings(key,value,updated_at,updated_by) VALUES(?,?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at,updated_by=excluded.updated_by',('idle_timeout_seconds',str(n*60),t,u['id']))
                 elif k=='idle_timeout_seconds':
                     c.execute('INSERT INTO settings(key,value,updated_at,updated_by) VALUES(?,?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at,updated_by=excluded.updated_by',('idle_timeout_minutes',str(max(1,round(n/60))),t,u['id']))
+            if k=='subscription_first_month' and not re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])',vv): raise ValueError('First subscription month must use YYYY-MM format.')
+            if k in ('subscription_paybill','subscription_account') and not vv: raise ValueError(f'{k} cannot be blank.')
             if k=='subscription_monthly_amount':
                 try: amount=float(vv)
                 except (TypeError,ValueError): raise ValueError('Enter a valid monthly subscription amount in KSh.')
@@ -515,10 +522,11 @@ def validate_payments(c, payments, total):
         if amt<=0: raise ValueError('Payment amount must be greater than zero.')
         if method not in ('CASH','MPESA'): raise ValueError('Payment method must be Cash or M-Pesa.')
         if method=='MPESA':
-            if not code: raise ValueError('M-Pesa transaction code is required for every M-Pesa payment.')
-            if code in seen: raise ValueError(f'M-Pesa code {code} is duplicated in this sale.')
-            if c.execute('SELECT 1 FROM sale_payments WHERE UPPER(mpesa_code)=?',(code,)).fetchone() or c.execute('SELECT 1 FROM credit_payments WHERE UPPER(mpesa_code)=?',(code,)).fetchone(): raise ValueError(f'M-Pesa code {code} has already been used.')
-            seen.add(code)
+            if not code and get_setting('require_mpesa_code','YES')=='YES': raise ValueError('M-Pesa transaction code is required for every M-Pesa payment.')
+            if code:
+                if code in seen: raise ValueError(f'M-Pesa code {code} is duplicated in this sale.')
+                if c.execute('SELECT 1 FROM sale_payments WHERE UPPER(mpesa_code)=?',(code,)).fetchone() or c.execute('SELECT 1 FROM credit_payments WHERE UPPER(mpesa_code)=?',(code,)).fetchone(): raise ValueError(f'M-Pesa code {code} has already been used.')
+                seen.add(code)
         else: code=''
         paid += amt
     if paid.quantize(Decimal('0.01')) != Decimal(str(total)).quantize(Decimal('0.01')): raise ValueError(f'Payments must equal sale total. Entered {money(paid)} of {money(total)}.')
@@ -526,6 +534,7 @@ def validate_payments(c, payments, total):
 
 def create_sale(u, data):
     cart=data.get('cart') or []; payments=data.get('payments') or []; customer=data.get('customer') or {}; credit=data.get('credit') or None; sale_type=str(data.get('sale_type','RETAIL') or 'RETAIL').upper()
+    if credit and get_setting('allow_credit_sales','YES')!='YES': raise ValueError('Credit sales are disabled by Administrator.')
     if sale_type not in ('RETAIL','WHOLESALE'): raise ValueError('Sale type must be Retail or Wholesale.')
     if not cart: raise ValueError('Cart is empty.')
     c=db.c()
