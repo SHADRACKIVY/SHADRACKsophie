@@ -60,6 +60,48 @@ jobs:
           admin_id = c.execute("INSERT INTO users(username,full_name,password_hash,role,access_role,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)", ("testadmin","Test Admin",core.sha("test-password"),"ADMIN","ADMIN",1,ts,ts)).lastrowid
           c.commit()
           admin = {"id":admin_id,"branch_id":None,"username":"testadmin","full_name":"Test Admin","access_role":"ADMIN","role":"ADMIN"}
+          # Verify settings values and range validation.
+          core.update_settings(admin, {"default_unit":"crate","mpesa_recovery_match_window_minutes":"60","change_reason":"Automated settings persistence test"})
+          assert core.get_setting("default_unit")=="crate"
+          assert core.get_setting("mpesa_recovery_match_window_minutes")=="60"
+          try:
+              core.update_settings(admin, {"mpesa_recovery_match_window_minutes":"4","change_reason":"Invalid range must fail"})
+              raise AssertionError("Invalid M-Pesa recovery window was accepted.")
+          except ValueError:
+              pass
+          # Verify role profiles and that changing a user's role clears stale overrides.
+          management_id=save_user(admin, {"username":"rolemanager","full_name":"Role Manager","password":"test-password","role":"MANAGEMENT","branch_id":""})
+          sales_id=save_user(admin, {"username":"rolebranch","full_name":"Role Branch","password":"test-password","role":"SALES","branch_id":str(b2)})
+          core.update_permissions(admin, {"roles":{"MANAGEMENT":{"VIEW_STOCK":True,"VIEW_REPORTS":False,"MANAGE_SETTINGS":True},"SALES":{"CREATE_SALE":True,"MANAGE_USERS":True}},"users":{}})
+          mgmt={"id":management_id,"branch_id":None,"username":"rolemanager","full_name":"Role Manager","access_role":"MANAGEMENT","role":"SALES"}
+          staff={"id":sales_id,"branch_id":b2,"username":"rolebranch","full_name":"Role Branch","access_role":"SALES","role":"SALES"}
+          assert core.effective_permissions(mgmt)["VIEW_STOCK"] is True
+          assert core.effective_permissions(mgmt)["VIEW_REPORTS"] is False
+          assert core.effective_permissions(mgmt)["MANAGE_SETTINGS"] is False
+          assert core.effective_permissions(staff)["CREATE_SALE"] is True
+          assert core.effective_permissions(staff)["MANAGE_USERS"] is False
+          c=core.db.c()
+          c.execute("INSERT INTO user_permissions(user_id,key,enabled) VALUES(?,?,0)",(sales_id,"VIEW_STOCK"))
+          c.commit(); c.close()
+          admin_edit_user(admin, {"user_id":str(sales_id),"full_name":"Role Branch","role":"MANAGEMENT","active":"1","branch_id":str(b2)})
+          c=core.db.c()
+          role_row=c.execute("SELECT access_role,branch_id,home_branch_id FROM users WHERE id=?",(sales_id,)).fetchone()
+          override_count=c.execute("SELECT COUNT(*) n FROM user_permissions WHERE user_id=?",(sales_id,)).fetchone()["n"]
+          c.close()
+          assert role_row["access_role"]=="MANAGEMENT" and role_row["home_branch_id"]==b2 and role_row["branch_id"]==b2
+          assert override_count==0
+          mgmt_staff={"id":sales_id,"branch_id":b2,"username":"rolebranch","full_name":"Role Branch","access_role":"MANAGEMENT","role":"SALES"}
+          assert core.effective_permissions(mgmt_staff)["VIEW_STOCK"] is True
+          try:
+              admin_edit_user(admin, {"user_id":str(sales_id),"full_name":"Role Branch","role":"MANAGEMENT","active":"1","branch_id":str(b1)})
+              raise AssertionError("A branch-bound account was moved to another branch.")
+          except PermissionError:
+              pass
+          admin_edit_user(admin, {"user_id":str(sales_id),"full_name":"Role Branch","role":"SALES","active":"1","branch_id":str(b2)})
+          c=core.db.c()
+          role_row=c.execute("SELECT access_role,branch_id,home_branch_id FROM users WHERE id=?",(sales_id,)).fetchone()
+          c.close()
+          assert role_row["access_role"]=="SALES" and role_row["branch_id"]==b2 and role_row["home_branch_id"]==b2
           stock_transfer_action(user, {"action":"request","destination_branch_id":str(b1),"product_id":str(p),"qty":"10","reason":"Automated transfer approval test"})
           c = core.db.c()
           transfer_id = c.execute("SELECT id FROM stock_transfers WHERE source_branch_id=? AND destination_branch_id=? AND product_id=? AND status='PENDING' ORDER BY id DESC LIMIT 1",(b2,b1,p)).fetchone()["id"]
@@ -74,5 +116,5 @@ jobs:
           report = core.stock_report("1900-01-01 00:00:00","2999-12-31 23:59:59",b2)
           product_row = next(row for row in report if row["sku"]=="TEST-001")
           assert (product_row["opening"],product_row["purchased"],product_row["sold"],product_row["adjustments"],product_row["closing"]) == (80,5,10,-15,60), product_row
-          print("PASS: Branch isolation, opening/purchase/sale/closing reconciliation, COGS/gross profit, transfer approval and stock-count variance.")
+          print("PASS: Branch isolation, opening/purchase/sale/closing reconciliation, COGS/gross profit, transfers, stock counts, settings persistence, permission profiles, role changes and permanent branch assignment.")
           PY
