@@ -1,7 +1,7 @@
 name: Python syntax check
 on:
   push:
-    branches: [main]
+    branches: [main, "fix/settings-permissions-controls-20261103"]
   workflow_dispatch:
 jobs:
   compile:
@@ -22,7 +22,7 @@ jobs:
           import os, shutil
           shutil.rmtree(os.environ['KAKA_DATA_DIR'], ignore_errors=True)
           import kaka_core as core
-          from kaka_liquor_app import save_purchase, stock_transfer_action, stock_count_adjustment, branch_scope_for
+          from kaka_liquor_app import save_purchase, stock_transfer_action, stock_count_adjustment, branch_scope_for, save_user, admin_edit_user
           c = core.db.c()
           ts = core.now_str()
           b1 = c.execute("INSERT INTO branches(name,code,created_at,updated_at) VALUES(?,?,?,?)", ("Test Branch A","TSTA",ts,ts)).lastrowid
