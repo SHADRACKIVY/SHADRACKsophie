@@ -90,6 +90,9 @@ class DB:
         CREATE TABLE IF NOT EXISTS permissions(key TEXT PRIMARY KEY,label TEXT NOT NULL,description TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS role_permissions(role TEXT NOT NULL,key TEXT NOT NULL REFERENCES permissions(key) ON DELETE CASCADE,enabled INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(role,key));
         CREATE TABLE IF NOT EXISTS user_permissions(user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,key TEXT NOT NULL REFERENCES permissions(key) ON DELETE CASCADE,enabled INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(user_id,key));
+        CREATE TABLE IF NOT EXISTS financial_transfers(id INTEGER PRIMARY KEY AUTOINCREMENT,transfer_no TEXT NOT NULL UNIQUE,branch_id INTEGER NOT NULL REFERENCES branches(id),amount REAL NOT NULL CHECK(amount>0),mpesa_code TEXT NOT NULL UNIQUE,deposit_reference TEXT,note TEXT NOT NULL,created_at TEXT NOT NULL,created_by INTEGER NOT NULL REFERENCES users(id));
+        CREATE TABLE IF NOT EXISTS financial_opening_balances(id INTEGER PRIMARY KEY AUTOINCREMENT,account TEXT NOT NULL CHECK(account IN ('CASH','PAYBILL')),branch_key INTEGER NOT NULL DEFAULT 0,amount REAL NOT NULL CHECK(amount>=0),effective_at TEXT NOT NULL,note TEXT NOT NULL,created_at TEXT NOT NULL,created_by INTEGER NOT NULL REFERENCES users(id),UNIQUE(account,branch_key));
+        CREATE INDEX IF NOT EXISTS idx_financial_transfers_branch_date ON financial_transfers(branch_id,created_at);
         ''')
         # Branch stock isolation: stock balances are stored per branch/product. Legacy shared
         # products.stock_qty is deliberately NOT copied into branches; opening stock must be
