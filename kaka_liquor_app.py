@@ -400,7 +400,7 @@ def save_purchase(u, form):
     c=core.db.c()
     try:
         c.execute('BEGIN IMMEDIATE')
-        branch_id=u.get('branch_id') or int(form.get('branch_id') or 0)
+        branch_id=(u.get('branch_id') if role_name(u) not in ('ADMIN','MANAGEMENT') else (int(form.get('branch_id') or 0) or u.get('branch_id')))
         if not branch_id:
             br=c.execute('SELECT id FROM branches WHERE active=1 ORDER BY id LIMIT 1').fetchone()
             if not br: raise ValueError('Register an active branch before recording purchases.')
@@ -481,7 +481,7 @@ def save_product(u, form):
         ts=now(); avg_cost=opening_cost
         cur=c.execute('INSERT INTO products(product_no,sku,name,category,unit,sell_price,wholesale_price,avg_cost,stock_qty,reorder_level,active,created_at,updated_at) VALUES(NULL,?,?,?,?,?,?,?,?,?,1,?,?)',(sku,name,cat,unit,sell,wholesale,avg_cost,0,reorder,ts,ts)); pid=cur.lastrowid; product_no=f'PRD-{pid:05d}'
         c.execute('UPDATE products SET product_no=? WHERE id=?',(product_no,pid))
-        branch_id=u.get('branch_id') or int(form.get('branch_id') or 0)
+        branch_id=(u.get('branch_id') if role_name(u) not in ('ADMIN','MANAGEMENT') else (int(form.get('branch_id') or 0) or u.get('branch_id')))
         if not branch_id:
             br=c.execute('SELECT id FROM branches WHERE active=1 ORDER BY id LIMIT 1').fetchone()
             if not br: raise ValueError('Register an active branch before entering opening stock.')
@@ -563,7 +563,7 @@ def admin_set_stock(u, form):
     try:
         c.execute('BEGIN IMMEDIATE'); p=c.execute('SELECT * FROM products WHERE id=?',(pid,)).fetchone()
         if not p: raise ValueError('Product not found.')
-        branch_id=u.get('branch_id') or int(form.get('branch_id') or 0)
+        branch_id=(u.get('branch_id') if role_name(u) not in ('ADMIN','MANAGEMENT') else (int(form.get('branch_id') or 0) or u.get('branch_id')))
         if not branch_id:
             br=c.execute('SELECT id FROM branches WHERE active=1 ORDER BY id LIMIT 1').fetchone(); branch_id=br['id'] if br else None
         bs=c.execute('SELECT * FROM branch_stock WHERE branch_id=? AND product_id=?',(branch_id,pid)).fetchone()
@@ -885,7 +885,7 @@ def sales_page(u, message='', search_query='', search_results=None, selected_cus
     require_perm_user(u,'CREATE_SALE')
     max_payments=max(1,min(5,int(float(core.get_setting('max_payment_transactions','5')))))
     default_payment_count=max(1,min(max_payments,int(float(core.get_setting('default_payment_transactions','1')))))
-    ps=core.products()
+    ps=core.products(u.get('branch_id'))
     product_opts=''.join(f'<option value="{p["id"]}" data-retail-price="{float(p["sell_price"]):.2f}" data-wholesale-price="{float(p.get('wholesale_price') or p['sell_price']):.2f}" data-sku="{esc(p.get("sku",""))}">{esc(p["name"])} · Retail {money(p["sell_price"])} / Wholesale {money(p.get('wholesale_price') or p['sell_price'])} · Stock {p["stock_qty"]}</option>' for p in ps) or '<option value="">No products registered</option>'
     c=core.db.c()
     rows=c.execute("SELECT s.receipt_no,s.sold_at,s.customer_type,s.sale_type,s.total,COALESCE(cu.full_name,'Walk-in Customer') customer,COALESCE(u.full_name,'') user_name FROM sales s LEFT JOIN customers cu ON cu.id=s.customer_id LEFT JOIN users u ON u.id=s.user_id ORDER BY s.id DESC LIMIT 100").fetchall(); c.close()
@@ -1052,7 +1052,7 @@ def ai_page(u,message=''):
 
 
 def purchase_page(u, message=''):
-    require_perm_user(u,'CREATE_PURCHASE'); ps=core.products(); opts=''.join(f'<option value="{p["id"]}" data-sku="{esc(p.get("sku",""))}">{esc(p["name"])} · Stock {p["stock_qty"]}</option>' for p in ps) or '<option value="">No products registered</option>'
+    require_perm_user(u,'CREATE_PURCHASE'); ps=core.products(u.get('branch_id')); opts=''.join(f'<option value="{p["id"]}" data-sku="{esc(p.get("sku",""))}">{esc(p["name"])} · Stock {p["stock_qty"]}</option>' for p in ps) or '<option value="">No products registered</option>'
     c=core.db.c(); rows=c.execute('SELECT pu.id purchase_id,pu.purchase_no,pu.purchased_at,pu.supplier,pu.total,pu.payment_method,pu.reference,u.full_name,p.name product,pl.product_id,pl.qty,pl.unit_cost FROM purchases pu JOIN purchase_lines pl ON pl.purchase_id=pu.id JOIN products p ON p.id=pl.product_id JOIN users u ON u.id=pu.user_id ORDER BY pu.id DESC LIMIT 100').fetchall(); c.close()
     notice=f'<div class="flash error">{esc(message)}</div>' if message else ''
     if role_name(u)=='ADMIN':
@@ -1369,10 +1369,12 @@ def export_report_v2(handler, u, qs):
         data=[[r['receipt_no'],r['sold_at'],r['customer'],r['units'],r['total'],r['cash'],r['mpesa'],r['attended_by']] for r in rows]
         title=f"{core.get_setting('business_name',APP_NAME)} · {core.get_setting('business_branch_name','')} · SALES REPORT"
     elif kind=='stock':
-        require_perm_user(u,'VIEW_STOCK'); rows=core.stock_report(start,end)
-        headers=['Product Name','Category','Shared Stock','Purchased','Total Sold','Retail Units','Wholesale Units','Retail Revenue','Wholesale Revenue','Retail Units %','Wholesale Units %','Retail Revenue %','Wholesale Revenue %','Retail Price','Wholesale Price','Avg Cost','Stock Value','Reorder','Status']
-        data=[[r['name'],r['category'],r['stock'],r['purchased'],r['sold'],r['retail_units'],r['wholesale_units'],r['retail_revenue'],r['wholesale_revenue'],r['retail_units_pct'],r['wholesale_units_pct'],r['retail_revenue_pct'],r['wholesale_revenue_pct'],r['retail_price'],r['wholesale_price'],r['avg_cost'],r['stock_value'],r['reorder_level'],r['status']] for r in rows]
-        title=f"{core.get_setting('business_name',APP_NAME)} · {core.get_setting('business_branch_name','')} · STOCK REPORT"
+        require_perm_user(u,'VIEW_STOCK'); bid=int(qs.get('branch_id',['0'])[0] or 0) or None
+        if role_name(u) not in ('ADMIN','MANAGEMENT'): bid=int(u.get('branch_id') or 0)
+        rows=core.stock_report(start,end,bid)
+        headers=['Product Name','Category','Opening Stock','Purchased','Sold','Adjustments','Closing Stock','Retail Units','Wholesale Units','Retail Revenue','Wholesale Revenue','Retail Price','Wholesale Price','Avg Cost','Closing Value','Reorder','Status']
+        data=[[r['name'],r['category'],r['opening'],r['purchased'],r['sold'],r['adjustments'],r['closing'],r['retail_units'],r['wholesale_units'],r['retail_revenue'],r['wholesale_revenue'],r['retail_price'],r['wholesale_price'],r['avg_cost'],r['closing']*r['avg_cost'],r['reorder_level'],r['status']] for r in rows]
+        title=f"{core.get_setting('business_name',APP_NAME)} · BRANCH STOCK REPORT"
     elif kind=='reorder':
         require_perm_user(u,'VIEW_STOCK'); rows=[r for r in core.stock_report(start,end) if r['status'] in ('LOW STOCK','OUT OF STOCK')]
         headers=['Product Name','Category','Current Stock','Reorder Level','Status','Avg Cost','Stock Value']
@@ -2355,7 +2357,9 @@ class Handler(BaseHTTPRequestHandler):
         kind=qs.get('kind',['report'])[0]; fmt=qs.get('format',['xlsx'])[0]; require_perm_user(u,'PRINT_EXPORT'); start=qs.get('start',[''])[0]; end=qs.get('end',[''])[0]
         if not start or not end: raise ValueError('Report period is missing.')
         if kind=='stock':
-            require_perm_user(u,'VIEW_STOCK'); rows=core.stock_report(start,end); headers=['SKU','Product Name','Category','Shared Stock','Purchased','Total Sold','Retail Units','Wholesale Units','Retail Revenue','Wholesale Revenue','Retail Units %','Wholesale Units %','Retail Revenue %','Wholesale Revenue %','Retail Price','Wholesale Price','Avg Cost','Stock Value','Reorder','Status']; data=[[r['sku'],r['name'],r['category'],r['stock'],r['purchased'],r['sold'],r['retail_units'],r['wholesale_units'],r['retail_revenue'],r['wholesale_revenue'],r['retail_units_pct'],r['wholesale_units_pct'],r['retail_revenue_pct'],r['wholesale_revenue_pct'],r['retail_price'],r['wholesale_price'],r['avg_cost'],r['stock_value'],r['reorder_level'],r['status']] for r in rows]; title=f"{core.get_setting('business_name',APP_NAME)} · {core.get_setting('business_branch_name','')} · STOCK REPORT"
+            require_perm_user(u,'VIEW_STOCK'); bid=int(qs.get('branch_id',['0'])[0] or 0) or None
+            if role_name(u) not in ('ADMIN','MANAGEMENT'): bid=int(u.get('branch_id') or 0)
+            rows=core.stock_report(start,end,bid); headers=['SKU','Product Name','Category','Opening Stock','Purchased','Sold','Adjustments','Closing Stock','Retail Units','Wholesale Units','Retail Revenue','Wholesale Revenue','Retail Price','Wholesale Price','Avg Cost','Closing Value','Reorder','Status']; data=[[r['sku'],r['name'],r['category'],r['opening'],r['purchased'],r['sold'],r['adjustments'],r['closing'],r['retail_units'],r['wholesale_units'],r['retail_revenue'],r['wholesale_revenue'],r['retail_price'],r['wholesale_price'],r['avg_cost'],r['closing']*r['avg_cost'],r['reorder_level'],r['status']] for r in rows]; title=f"{core.get_setting('business_name',APP_NAME)} · BRANCH STOCK REPORT"
         else:
             require_perm_user(u,'VIEW_REPORTS'); rows=core.report_data(start,end); headers=['Receipt','Date/Time','Customer','Units','Total','Cash','M-Pesa','Attended By']; data=[[r['receipt_no'],r['sold_at'],r['customer'],r['units'],r['total'],r['cash'],r['mpesa'],r['attended_by']] for r in rows]; title=f"{core.get_setting('business_name',APP_NAME)} · {core.get_setting('business_branch_name','')} · SALES REPORT"
         if fmt=='pdf': return send_file(self,make_pdf(title,headers,data),'application/pdf',re.sub(r'[^A-Za-z0-9]+','_',title)+'.pdf')
