@@ -411,7 +411,7 @@ def save_purchase(u, form):
             p=c.execute('SELECT * FROM products WHERE id=? AND active=1',(product_id,)).fetchone()
             if not p:
                 raise ValueError(f'Product #{product_id} was not found or is inactive.')
-            c.execute('INSERT OR IGNORE INTO branch_stock(branch_id,product_id,qty,avg_cost,buy_price,sell_price,wholesale_price,reorder_level,updated_at) VALUES(?,?,0,?,?,?,?,?,?,?)',(branch_id,product_id,float(p['avg_cost'] or 0),float(p['avg_cost'] or 0),float(p['sell_price'] or 0),float(p['wholesale_price'] or p['sell_price'] or 0),float(p['reorder_level'] or 0),now()))
+            c.execute('INSERT OR IGNORE INTO branch_stock(branch_id,product_id,qty,avg_cost,buy_price,sell_price,wholesale_price,reorder_level,updated_at) VALUES(?,?,0,?,?,?,?,?,?)',(branch_id,product_id,float(p['avg_cost'] or 0),float(p['avg_cost'] or 0),float(p['sell_price'] or 0),float(p['wholesale_price'] or p['sell_price'] or 0),float(p['reorder_level'] or 0),now()))
             products[product_id]=p
         ts=now()
         no='PUR-'+dt.datetime.now().strftime('%Y%m%d%H%M%S')+'-'+secrets.token_hex(2).upper()
@@ -1161,14 +1161,29 @@ def stock_report_page(u, form=None, query=None):
     require_perm_user(u,'VIEW_STOCK')
     src=query if query is not None else (form or {})
     fd,ft,td,tt,preset=period_from_query(src); start=f'{fd} {ft}:00'; end=f'{td} {tt}:59'
-    rows=core.stock_report(start,end)
+    role=role_name(u); c=core.db.c()
+    branches=[dict(x) for x in c.execute('SELECT id,name FROM branches WHERE active=1 ORDER BY name').fetchall()]
+    c.close()
+    if role not in ('ADMIN','MANAGEMENT'):
+        branch_id=int(u.get('branch_id') or 0)
+        if not branch_id: raise PermissionError('Your account has no assigned branch.')
+        branches=[b for b in branches if int(b['id'])==branch_id]
+    else:
+        raw=(src.get('branch_id') or [''])[0] if isinstance(src.get('branch_id'),list) else src.get('branch_id','')
+        branch_id=int(raw) if str(raw).isdigit() else None
+        if branch_id is not None and not any(int(b['id'])==branch_id for b in branches): raise PermissionError('You are not authorised to view that branch.')
+    rows=core.stock_report(start,end,branch_id)
     total_retail_units=sum(float(r['retail_units']) for r in rows); total_wholesale_units=sum(float(r['wholesale_units']) for r in rows); total_units=total_retail_units+total_wholesale_units
     total_retail_revenue=sum(float(r['retail_revenue']) for r in rows); total_wholesale_revenue=sum(float(r['wholesale_revenue']) for r in rows); total_revenue=total_retail_revenue+total_wholesale_revenue
     channel_summary=f'''<div class="grid two" style="margin-top:12px"><section class="card"><h3>Retail Performance</h3><div>Units sold: <b>{total_retail_units:g}</b> ({(100*total_retail_units/total_units if total_units else 0):.1f}%)</div><div>Revenue: <b>{money(total_retail_revenue)}</b> ({(100*total_retail_revenue/total_revenue if total_revenue else 0):.1f}%)</div></section><section class="card"><h3>Wholesale Performance</h3><div>Units sold: <b>{total_wholesale_units:g}</b> ({(100*total_wholesale_units/total_units if total_units else 0):.1f}%)</div><div>Revenue: <b>{money(total_wholesale_revenue)}</b> ({(100*total_wholesale_revenue/total_revenue if total_revenue else 0):.1f}%)</div></section></div>'''
-    table=html_table(['Product Name','Category','Shared Stock','Purchased','Total Sold','Retail Sold','Wholesale Sold','Retail Revenue','Wholesale Revenue','Retail Unit %','Wholesale Unit %','Retail Revenue %','Wholesale Revenue %','Retail Price','Wholesale Price','Avg Cost','Stock Value','Reorder','Status'],[[esc(r['name']),esc(r['category']),r['stock'],r['purchased'],r['sold'],r['retail_units'],r['wholesale_units'],money(r['retail_revenue']),money(r['wholesale_revenue']),f"{r['retail_units_pct']:.1f}%",f"{r['wholesale_units_pct']:.1f}%",f"{r['retail_revenue_pct']:.1f}%",f"{r['wholesale_revenue_pct']:.1f}%",money(r['retail_price']),money(r['wholesale_price']),money(r['avg_cost']),money(r['stock_value']),r['reorder_level'],esc(r['status'])] for r in rows])
-    exp=f'/report/export?kind=stock&format={{fmt}}&start={esc(start)}&end={esc(end)}'
-    content=f'''<section class="card"><div class="section-head"><h2>Stock Report</h2><span class="pill">{esc(preset)}</span></div>{range_toolbar('/stock-report',fd,ft,td,tt)}{channel_summary}<div class="actions" style="margin-top:10px"><button type="button" class="btn" onclick="window.print()">PRINT</button><a class="btn" href="{exp.format(fmt='pdf')}">DOWNLOAD PDF</a><a class="btn" href="{exp.format(fmt='xlsx')}">DOWNLOAD EXCEL</a><a class="btn danger" href="/reorder-report?from_date={quote(fd)}&from_time={quote(ft)}&to_date={quote(td)}&to_time={quote(tt)}">REORDER REPORT</a></div></section><section class="card report-print" style="margin-top:14px">{table}</section>'''
-    return layout(u,'Stock Report',content,'/stock-report','Current stock and movement reporting')
+    table=html_table(['Product Name','Category','Opening Stock','Purchased','Sold','Adjustments','Closing Stock','Retail Sold','Wholesale Sold','Retail Revenue','Wholesale Revenue','Retail Price','Wholesale Price','Avg Cost','Closing Value','Reorder','Status'],[[esc(r['name']),esc(r['category']),r['opening'],r['purchased'],r['sold'],r['adjustments'],r['closing'],r['retail_units'],r['wholesale_units'],money(r['retail_revenue']),money(r['wholesale_revenue']),money(r['retail_price']),money(r['wholesale_price']),money(r['avg_cost']),money(r['closing']*r['avg_cost']),r['reorder_level'],esc(r['status'])] for r in rows])
+    branch_opts='<option value="">ALL BRANCHES / COMPANY TOTAL</option>' if role in ('ADMIN','MANAGEMENT') else ''
+    branch_opts+=''.join(f'<option value="{b["id"]}" {"selected" if branch_id==int(b["id"]) else ""}>{esc(b["name"])}</option>' for b in branches)
+    selector=f'''<form method="get" action="/stock-report" class="inline-actions"><label for="branch_id">Select Branch</label><select id="branch_id" name="branch_id" onchange="this.form.submit()">{branch_opts}</select><input type="hidden" name="from_date" value="{esc(fd)}"><input type="hidden" name="from_time" value="{esc(ft)}"><input type="hidden" name="to_date" value="{esc(td)}"><input type="hidden" name="to_time" value="{esc(tt)}"></form>'''
+    selected_name=next((b['name'] for b in branches if branch_id and int(b['id'])==branch_id),'All Branches / Company Total')
+    exp=f'/report/export?kind=stock&format={{fmt}}&start={esc(start)}&end={esc(end)}&branch_id={branch_id or ""}'
+    content=f'''<section class="card"><div class="section-head"><h2>Branch Stock Movement Report</h2><span class="pill">{esc(preset)}</span></div><div class="notice"><b>Viewing: {esc(selected_name)}</b> · Each branch has its own opening, purchases, sales, adjustments and closing stock. A sale in one branch does not change another branch's quantity.</div>{selector}{range_toolbar('/stock-report',fd,ft,td,tt)}{channel_summary}<div class="actions" style="margin-top:10px"><button type="button" class="btn" onclick="window.print()">PRINT</button><a class="btn" href="{exp.format(fmt='pdf')}">DOWNLOAD PDF</a><a class="btn" href="{exp.format(fmt='xlsx')}">DOWNLOAD EXCEL</a><a class="btn danger" href="/reorder-report?from_date={quote(fd)}&from_time={quote(ft)}&to_date={quote(td)}&to_time={quote(tt)}">REORDER REPORT</a></div></section><section class="card report-print" style="margin-top:14px">{table}</section>'''
+    return layout(u,'Branch Stock Report',content,'/stock-report','Branch-by-branch opening, purchase, sales and closing stock')
 
 def reorder_report_page(u, query=None):
     require_perm_user(u,'VIEW_STOCK')
