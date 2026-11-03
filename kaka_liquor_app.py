@@ -1136,7 +1136,12 @@ def ai_page(u,message=''):
 
 def purchase_page(u, message=''):
     require_perm_user(u,'CREATE_PURCHASE'); ps=core.products(u.get('branch_id')); opts=''.join(f'<option value="{p["id"]}" data-sku="{esc(p.get("sku",""))}">{esc(p["name"])} · Stock {p["stock_qty"]}</option>' for p in ps) or '<option value="">No products registered</option>'
-    c=core.db.c(); rows=c.execute('SELECT pu.id purchase_id,pu.purchase_no,pu.purchased_at,pu.supplier,pu.total,pu.payment_method,pu.reference,u.full_name,p.name product,pl.product_id,pl.qty,pl.unit_cost FROM purchases pu JOIN purchase_lines pl ON pl.purchase_id=pu.id JOIN products p ON p.id=pl.product_id JOIN users u ON u.id=pu.user_id ORDER BY pu.id DESC LIMIT 100').fetchall(); c.close()
+    c=core.db.c(); purchase_sql='SELECT pu.id purchase_id,pu.purchase_no,pu.purchased_at,pu.supplier,pu.total,pu.payment_method,pu.reference,u.full_name,p.name product,pl.product_id,pl.qty,pl.unit_cost FROM purchases pu JOIN purchase_lines pl ON pl.purchase_id=pu.id JOIN products p ON p.id=pl.product_id JOIN users u ON u.id=pu.user_id'
+    if role_name(u) not in ('ADMIN','MANAGEMENT'):
+        if not u.get('branch_id'): c.close(); raise PermissionError('Your account has no assigned branch.')
+        rows=c.execute(purchase_sql+' WHERE pu.branch_id=? ORDER BY pu.id DESC LIMIT 100',(int(u['branch_id']),)).fetchall()
+    else: rows=c.execute(purchase_sql+' ORDER BY pu.id DESC LIMIT 100').fetchall()
+    c.close()
     notice=f'<div class="flash error">{esc(message)}</div>' if message else ''
     if role_name(u)=='ADMIN':
         purchase_rows=[]
@@ -1180,8 +1185,8 @@ function addExpenseLine(){{var box=document.getElementById('expense_lines'),firs
 
 def expense_report_page(u, query=None):
     require_perm_user(u,'VIEW_REPORTS')
-    fd,ft,td,tt,preset=period_from_query(query or {}); start=f'{fd} {ft}:00'; end=f'{td} {tt}:59'
-    rows=core.expense_report_data(start,end)
+    fd,ft,td,tt,preset=period_from_query(query or {}); start=f'{fd} {ft}:00'; end=f'{td} {tt}:59'; branch_id=branch_scope_for(u,query)
+    rows=core.expense_report_data(start,end,branch_id)
     if role_name(u)=='ADMIN':
         expense_rows=[]
         for r in rows:
@@ -1198,7 +1203,13 @@ def expense_report_page(u, query=None):
 
 def customers_page(u):
     require_perm_user(u,'MANAGE_CUSTOMERS')
-    c=core.db.c(); rows=c.execute("SELECT c.*,COALESCE(SUM(ca.principal-ca.paid_amount),0) balance FROM customers c LEFT JOIN credit_accounts ca ON ca.customer_id=c.id AND ca.status='OPEN' GROUP BY c.id ORDER BY c.full_name").fetchall(); credits=c.execute("""SELECT ca.id credit_id,ca.principal,ca.paid_amount,MAX(ca.principal-ca.paid_amount,0) balance,ca.due_date,ca.status,c.full_name,c.phone,s.receipt_no FROM credit_accounts ca JOIN customers c ON c.id=ca.customer_id JOIN sales s ON s.id=ca.sale_id ORDER BY CASE WHEN ca.status='OPEN' THEN 0 ELSE 1 END,c.full_name,ca.id DESC""").fetchall(); c.close()
+    branch_id=branch_scope_for(u)
+    c=core.db.c()
+    customer_scope=' AND c.branch_id=?' if branch_id is not None else ''
+    credit_scope=' WHERE s.branch_id=?' if branch_id is not None else ''
+    args=(int(branch_id),) if branch_id is not None else ()
+    rows=c.execute("SELECT c.*,COALESCE(SUM(CASE WHEN ca.status='OPEN' AND ca_branch.branch_id IS NOT NULL THEN ca.principal-ca.paid_amount ELSE 0 END),0) balance FROM customers c LEFT JOIN credit_accounts ca ON ca.customer_id=c.id LEFT JOIN sales ca_branch ON ca_branch.id=ca.sale_id WHERE c.active=1"+customer_scope+" GROUP BY c.id ORDER BY c.full_name",args).fetchall()
+    credits=c.execute("SELECT ca.id credit_id,ca.principal,ca.paid_amount,MAX(ca.principal-ca.paid_amount,0) balance,ca.due_date,ca.status,c.full_name,c.phone,s.receipt_no FROM credit_accounts ca JOIN customers c ON c.id=ca.customer_id JOIN sales s ON s.id=ca.sale_id"+credit_scope+" ORDER BY CASE WHEN ca.status='OPEN' THEN 0 ELSE 1 END,c.full_name,ca.id DESC",args).fetchall(); c.close()
     customer_table=html_table(['Customer','Phone','ID / Passport','Address','Credit Balance'],[[esc(r['full_name']),esc(r['phone']),esc(r['id_no'] or ''),esc(r['address'] or ''),money(r['balance'])] for r in rows])
     cards=[]
     for r in credits:
@@ -1216,6 +1227,7 @@ def customers_page(u):
 
 def reports_page(u, form=None, message='', query=None):
     require_perm_user(u,'VIEW_REPORTS')
+    scope_src=query if query is not None else (form or {}); branch_id=branch_scope_for(u,scope_src)
     if form:
         fd=form.get('from_date',''); ft=form.get('from_time','00:00'); td=form.get('to_date',''); tt=form.get('to_time','23:59')
         if not fd or not td: fd,ft,td,tt,preset=period_from_query({})
@@ -1225,7 +1237,7 @@ def reports_page(u, form=None, message='', query=None):
     start=f'{fd} {ft}:00'; end=f'{td} {tt}:59'; rows=[]
     try:
         if start>end: raise ValueError('From date/time must be before To date/time.')
-        rows=core.report_data(start,end)
+        rows=core.report_data(start,end,branch_id)
     except Exception as e: message=str(e)
     notice=f'<div class="flash error">{esc(message)}</div>' if message else ''
     if role_name(u)=='ADMIN':
@@ -1239,7 +1251,8 @@ def reports_page(u, form=None, message='', query=None):
         table=html_table(['Receipt','Date & Time','Customer','Units','Total','Cash','M-Pesa','Attended By'],[[esc(r['receipt_no']),esc(r['sold_at']),esc(r['customer']),r['units'],money(r['total']),money(r['cash']),money(r['mpesa']),esc(r['attended_by'])] for r in rows],'No sales for selected period.')
     exp=f'/report/export?kind=report&start={quote(start)}&end={quote(end)}&format={{fmt}}'
     total=sum(float(r['total']) for r in rows); cash=sum(float(r['cash']) for r in rows); mp=sum(float(r['mpesa']) for r in rows); units=sum(float(r['units']) for r in rows)
-    content=f'''{notice}<section class="card"><div class="section-head"><h2>Sales & Monthly Reports</h2><span class="pill">{esc(preset)}</span></div>{range_toolbar('/reports',fd,ft,td,tt)}<div class="grid four" style="margin-top:12px"><div class="metric"><div class="muted">SALES</div><div class="v">{money(total)}</div></div><div class="metric"><div class="muted">CASH</div><div class="v">{money(cash)}</div></div><div class="metric"><div class="muted">M-PESA</div><div class="v">{money(mp)}</div></div><div class="metric"><div class="muted">UNITS</div><div class="v">{units:g}</div></div></div><div class="actions" style="margin-top:10px"><button type="button" class="btn" onclick="window.print()">PRINT REPORT</button><a class="btn" href="{exp.format(fmt='pdf')}">DOWNLOAD PDF</a><a class="btn" href="{exp.format(fmt='xlsx')}">DOWNLOAD EXCEL</a></div></section><section class="card report-print" style="margin-top:14px"><div class="report-head"><div><h2>{esc(APP_NAME)}</h2><div class="muted">Period: {esc(start)} → {esc(end)} · Generated by {esc(u['full_name'])} @{esc(u['username'])} at {now()}</div></div></div>{table}</section>'''
+    selector=branch_scope_selector(u,scope_src,'/reports')
+    content=f'''{selector}{notice}<section class="card"><div class="section-head"><h2>Sales & Monthly Reports</h2><span class="pill">{esc(preset)}</span></div>{range_toolbar('/reports',fd,ft,td,tt)}<div class="grid four" style="margin-top:12px"><div class="metric"><div class="muted">SALES</div><div class="v">{money(total)}</div></div><div class="metric"><div class="muted">CASH</div><div class="v">{money(cash)}</div></div><div class="metric"><div class="muted">M-PESA</div><div class="v">{money(mp)}</div></div><div class="metric"><div class="muted">UNITS</div><div class="v">{units:g}</div></div></div><div class="actions" style="margin-top:10px"><button type="button" class="btn" onclick="window.print()">PRINT REPORT</button><a class="btn" href="{exp.format(fmt='pdf')}">DOWNLOAD PDF</a><a class="btn" href="{exp.format(fmt='xlsx')}">DOWNLOAD EXCEL</a></div></section><section class="card report-print" style="margin-top:14px"><div class="report-head"><div><h2>{esc(APP_NAME)}</h2><div class="muted">Period: {esc(start)} → {esc(end)} · Generated by {esc(u['full_name'])} @{esc(u['username'])} at {now()}</div></div></div>{table}</section>'''
     return layout(u,'Reports',content,'/reports','End day, week, monthly and custom reporting')
 
 def stock_report_page(u, form=None, query=None):
@@ -1401,15 +1414,17 @@ def settings_page(u, message=''):
 
 def ledger_page(u, query=None):
     require_perm_user(u,'VIEW_LEDGER')
-    fd,ft,td,tt,preset=period_from_query(query or {}); start=f'{fd} {ft}:00'; end=f'{td} {tt}:59'; rows=core.ledger_data(start,end)
-    content=f'''<section class="card"><div class="section-head"><h2>General Ledger</h2><span class="pill">{esc(preset)}</span></div>{range_toolbar('/ledger',fd,ft,td,tt)}<div class="muted" style="margin-top:8px">Generated by {esc(u['full_name'])} @{esc(u['username'])} at {now()}</div><div class="actions" style="margin-top:10px"><button type="button" class="btn" onclick="window.print()">PRINT</button><a class="btn" href="/ledger/export?format=pdf&start={esc(start)}&end={esc(end)}">DOWNLOAD PDF</a><a class="btn" href="/ledger/export?format=xlsx&start={esc(start)}&end={esc(end)}">DOWNLOAD EXCEL</a></div></section><section class="card report-print" style="margin-top:14px">{html_table(['Date & Time','Reference','Description','Debit Account','Debit','Credit Account','Credit'],[[esc(a),esc(b),esc(c),esc(d),money(e),esc(f),money(g)] for a,b,c,d,e,f,g in rows])}</section>'''
+    fd,ft,td,tt,preset=period_from_query(query or {}); start=f'{fd} {ft}:00'; end=f'{td} {tt}:59'; branch_id=branch_scope_for(u,query); rows=core.ledger_data(start,end,branch_id)
+    selector=branch_scope_selector(u,query,'/ledger')
+    content=f'''{selector}<section class="card"><div class="section-head"><h2>General Ledger</h2><span class="pill">{esc(preset)}</span></div>{range_toolbar('/ledger',fd,ft,td,tt)}<div class="muted" style="margin-top:8px">Generated by {esc(u['full_name'])} @{esc(u['username'])} at {now()}</div><div class="actions" style="margin-top:10px"><button type="button" class="btn" onclick="window.print()">PRINT</button><a class="btn" href="/ledger/export?format=pdf&start={esc(start)}&end={esc(end)}">DOWNLOAD PDF</a><a class="btn" href="/ledger/export?format=xlsx&start={esc(start)}&end={esc(end)}">DOWNLOAD EXCEL</a></div></section><section class="card report-print" style="margin-top:14px">{html_table(['Date & Time','Reference','Description','Debit Account','Debit','Credit Account','Credit'],[[esc(a),esc(b),esc(c),esc(d),money(e),esc(f),money(g)] for a,b,c,d,e,f,g in rows])}</section>'''
     return layout(u,'Ledger',content,'/ledger','Custom accounting ledger')
 
 def pl_page(u, query=None):
     require_perm_user(u,'VIEW_LEDGER')
-    fd,ft,td,tt,preset=period_from_query(query or {}); start=f'{fd} {ft}:00'; end=f'{td} {tt}:59'; d=core.pl_summary(start,end)
+    fd,ft,td,tt,preset=period_from_query(query or {}); start=f'{fd} {ft}:00'; end=f'{td} {tt}:59'; branch_id=branch_scope_for(u,query); d=core.pl_summary(start,end,branch_id)
     cogs_notice=(f'<div class="flash error" style="margin-top:12px">COGS DATA WARNING: {d["cogs_missing_lines"]} sale line(s) have no usable unit cost and {d["cogs_estimated_lines"]} historic line(s) use an estimated current average cost. Profit may be inaccurate for these lines. Correct current stock cost in Product Registration → SET AVG COST; historical missing costs require source records to reconstruct accurately.</div>' if (d['cogs_missing_lines'] or d['cogs_estimated_lines']) else f'<div class="notice" style="margin-top:12px">COGS coverage: {d["cogs_coverage_pct"]:.1f}% of sale lines use a recorded sale-time cost.</div>')
-    content=f'''<section class="card"><div class="section-head"><h2>Profit & Loss</h2><span class="pill">{esc(preset)}</span></div>{range_toolbar('/profit-loss',fd,ft,td,tt)}<div class="muted" style="margin-top:8px">Generated by {esc(u['full_name'])} @{esc(u['username'])} at {now()}</div><div class="grid four" style="margin-top:12px"><div class="metric"><div class="muted">SALES REVENUE</div><div class="v">{money(d['revenue'])}</div></div><div class="metric"><div class="muted">COGS</div><div class="v">{money(d['cogs'])}</div></div><div class="metric"><div class="muted">GROSS PROFIT</div><div class="v">{money(d['gross_profit'])}</div></div><div class="metric"><div class="muted">NET PROFIT</div><div class="v">{money(d['net_profit'])}</div></div></div>{cogs_notice}<div class="muted" style="margin-top:8px">COGS is based on the unit-cost snapshot saved with each sale line, not today's selling price.</div><div class="actions" style="margin-top:12px"><button type="button" class="btn" onclick="window.print()">PRINT</button><a class="btn" href="/pl/export?format=pdf&start={esc(start)}&end={esc(end)}">DOWNLOAD PDF</a><a class="btn" href="/pl/export?format=xlsx&start={esc(start)}&end={esc(end)}">DOWNLOAD EXCEL</a></div></section>'''
+    selector=branch_scope_selector(u,query,'/profit-loss')
+    content=f'''{selector}<section class="card"><div class="section-head"><h2>Profit & Loss</h2><span class="pill">{esc(preset)}</span></div>{range_toolbar('/profit-loss',fd,ft,td,tt)}<div class="muted" style="margin-top:8px">Generated by {esc(u['full_name'])} @{esc(u['username'])} at {now()}</div><div class="grid four" style="margin-top:12px"><div class="metric"><div class="muted">SALES REVENUE</div><div class="v">{money(d['revenue'])}</div></div><div class="metric"><div class="muted">COGS</div><div class="v">{money(d['cogs'])}</div></div><div class="metric"><div class="muted">GROSS PROFIT</div><div class="v">{money(d['gross_profit'])}</div></div><div class="metric"><div class="muted">NET PROFIT</div><div class="v">{money(d['net_profit'])}</div></div></div>{cogs_notice}<div class="muted" style="margin-top:8px">COGS is based on the unit-cost snapshot saved with each sale line, not today's selling price.</div><div class="actions" style="margin-top:12px"><button type="button" class="btn" onclick="window.print()">PRINT</button><a class="btn" href="/pl/export?format=pdf&start={esc(start)}&end={esc(end)}">DOWNLOAD PDF</a><a class="btn" href="/pl/export?format=xlsx&start={esc(start)}&end={esc(end)}">DOWNLOAD EXCEL</a></div></section>'''
     return layout(u,'Profit & Loss',content,'/profit-loss','Custom date and time financial performance')
 
 def backup_page(u):
@@ -2190,6 +2205,7 @@ class Handler(BaseHTTPRequestHandler):
                 '/profit-loss':pl_page,'/backup':backup_page,'/audit':audit_page,'/ai':ai_page}
             if path=='/change-password': return send_html(self,change_password_page(u))
             if path in routes:
+                if path=='/': return send_html(self,home_page(u,qs))
                 if path in ('/reports','/stock-report','/branch-performance'):
                     return send_html(self, routes[path](u, query=qs))
                 if path in ('/expense-report','/ledger','/profit-loss','/reorder-report'):
