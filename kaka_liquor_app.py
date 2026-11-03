@@ -742,7 +742,7 @@ def admin_edit_user(u, form):
         if not target: raise ValueError('User not found.')
         # Preserve a Sales Person's first assigned branch even if the account is
         # temporarily changed to Management or Administrator and later changed back.
-        home_branch_id=int(target['home_branch_id'] or target['branch_id'] or 0) if 'home_branch_id' in target.keys() else int(target['branch_id'] or 0)
+        home_branch_id=int(target['home_branch_id'] or (target['branch_id'] if target['access_role']=='SALES' else 0) or 0) if 'home_branch_id' in target.keys() else (int(target['branch_id'] or 0) if target['access_role']=='SALES' else 0)
         if home_branch_id:
             if branch_id and branch_id!=home_branch_id:
                 raise PermissionError('This account is permanently linked to its original branch and cannot be moved to another branch.')
