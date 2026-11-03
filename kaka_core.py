@@ -79,7 +79,8 @@ class DB:
         CREATE TABLE IF NOT EXISTS purchases(id INTEGER PRIMARY KEY AUTOINCREMENT,purchase_no TEXT UNIQUE NOT NULL,purchased_at TEXT NOT NULL,user_id INTEGER NOT NULL REFERENCES users(id),supplier TEXT NOT NULL,payment_method TEXT NOT NULL,total REAL NOT NULL,reference TEXT);
         CREATE TABLE IF NOT EXISTS purchase_lines(id INTEGER PRIMARY KEY AUTOINCREMENT,purchase_id INTEGER NOT NULL REFERENCES purchases(id) ON DELETE CASCADE,product_id INTEGER NOT NULL REFERENCES products(id),qty REAL NOT NULL,unit_cost REAL NOT NULL,total REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS expenses(id INTEGER PRIMARY KEY AUTOINCREMENT,expense_no TEXT UNIQUE NOT NULL,expense_date TEXT NOT NULL,user_id INTEGER NOT NULL REFERENCES users(id),category TEXT NOT NULL,description TEXT NOT NULL,amount REAL NOT NULL,payment_method TEXT NOT NULL,reference TEXT);
-        CREATE TABLE IF NOT EXISTS stock_movements(id INTEGER PRIMARY KEY AUTOINCREMENT,movement_time TEXT NOT NULL,user_id INTEGER NOT NULL REFERENCES users(id),product_id INTEGER NOT NULL REFERENCES products(id),movement_type TEXT NOT NULL,qty REAL NOT NULL,before_qty REAL NOT NULL,after_qty REAL NOT NULL,unit_cost REAL NOT NULL,reference TEXT);
+        CREATE TABLE IF NOT EXISTS stock_movements(id INTEGER PRIMARY KEY AUTOINCREMENT,movement_time TEXT NOT NULL,user_id INTEGER NOT NULL REFERENCES users(id),product_id INTEGER NOT NULL REFERENCES products(id),movement_type TEXT NOT NULL,qty REAL NOT NULL,before_qty REAL NOT NULL,after_qty REAL NOT NULL,unit_cost REAL NOT NULL,reference TEXT,branch_id INTEGER REFERENCES branches(id));
+        CREATE TABLE IF NOT EXISTS branch_stock(branch_id INTEGER NOT NULL REFERENCES branches(id),product_id INTEGER NOT NULL REFERENCES products(id),qty REAL NOT NULL DEFAULT 0,avg_cost REAL NOT NULL DEFAULT 0,buy_price REAL NOT NULL DEFAULT 0,sell_price REAL NOT NULL DEFAULT 0,wholesale_price REAL NOT NULL DEFAULT 0,reorder_level REAL NOT NULL DEFAULT 5,updated_at TEXT NOT NULL,PRIMARY KEY(branch_id,product_id));
         CREATE TABLE IF NOT EXISTS audit_log(id INTEGER PRIMARY KEY AUTOINCREMENT,created_at TEXT NOT NULL,user_id INTEGER,username_snapshot TEXT NOT NULL,action TEXT NOT NULL,entity TEXT,entity_id TEXT,details TEXT);
         CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL,updated_at TEXT NOT NULL,updated_by INTEGER REFERENCES users(id));
         CREATE TABLE IF NOT EXISTS mpesa_stk_requests(id INTEGER PRIMARY KEY AUTOINCREMENT,created_at TEXT NOT NULL,user_id INTEGER NOT NULL REFERENCES users(id),checkout_request_id TEXT UNIQUE,merchant_request_id TEXT,client_ref TEXT UNIQUE NOT NULL,amount REAL NOT NULL,phone TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'PENDING',mpesa_code TEXT,transaction_date TEXT,raw_response TEXT,updated_at TEXT NOT NULL,sale_id INTEGER REFERENCES sales(id));
@@ -90,6 +91,27 @@ class DB:
         CREATE TABLE IF NOT EXISTS role_permissions(role TEXT NOT NULL,key TEXT NOT NULL REFERENCES permissions(key) ON DELETE CASCADE,enabled INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(role,key));
         CREATE TABLE IF NOT EXISTS user_permissions(user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,key TEXT NOT NULL REFERENCES permissions(key) ON DELETE CASCADE,enabled INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(user_id,key));
         ''')
+        # Branch stock isolation: stock balances are stored per branch/product. Legacy shared
+        # products.stock_qty is deliberately NOT copied into branches; opening stock must be
+        # physically verified and entered for each registered branch by an authorised user.
+        purchase_cols={r['name'] for r in c.execute('PRAGMA table_info(purchases)').fetchall()}
+        if 'branch_id' not in purchase_cols: c.execute('ALTER TABLE purchases ADD COLUMN branch_id INTEGER REFERENCES branches(id)')
+        movement_cols={r['name'] for r in c.execute('PRAGMA table_info(stock_movements)').fetchall()}
+        if 'branch_id' not in movement_cols: c.execute('ALTER TABLE stock_movements ADD COLUMN branch_id INTEGER REFERENCES branches(id)')
+        expense_cols={r['name'] for r in c.execute('PRAGMA table_info(expenses)').fetchall()}
+        if 'branch_id' not in expense_cols: c.execute('ALTER TABLE expenses ADD COLUMN branch_id INTEGER REFERENCES branches(id)')
+        # Branch attribution for historic activity is based on the employee's assigned branch.
+        c.execute('UPDATE purchases SET branch_id=(SELECT branch_id FROM users WHERE users.id=purchases.user_id) WHERE branch_id IS NULL')
+        c.execute('UPDATE stock_movements SET branch_id=(SELECT branch_id FROM users WHERE users.id=stock_movements.user_id) WHERE branch_id IS NULL')
+        c.execute('UPDATE expenses SET branch_id=(SELECT branch_id FROM users WHERE users.id=expenses.user_id) WHERE branch_id IS NULL')
+        # Create zeroed branch balances. Do not duplicate old shared quantities into every outlet.
+        for br in c.execute('SELECT id FROM branches').fetchall():
+            for pr in c.execute('SELECT id,avg_cost,sell_price,wholesale_price,reorder_level FROM products').fetchall():
+                c.execute('INSERT OR IGNORE INTO branch_stock(branch_id,product_id,qty,avg_cost,buy_price,sell_price,wholesale_price,reorder_level,updated_at) VALUES(?,?,0,?,?,?,?,?,?)',
+                    (br['id'],pr['id'],float(pr['avg_cost'] or 0),float(pr['avg_cost'] or 0),float(pr['sell_price'] or 0),float(pr['wholesale_price'] or pr['sell_price'] or 0),float(pr['reorder_level'] or 0),now_str()))
+        c.execute('CREATE INDEX IF NOT EXISTS idx_branch_stock_product ON branch_stock(product_id,branch_id)')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_movements_branch_time ON stock_movements(branch_id,movement_time)')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_purchases_branch_date ON purchases(branch_id,purchased_at)')
         # Branch management migration: keep historic sales attributed to the branch at time of sale.
         user_cols={r['name'] for r in c.execute('PRAGMA table_info(users)').fetchall()}
         if 'branch_id' not in user_cols:
@@ -454,19 +476,30 @@ def create_sale(u, data):
     if not cart: raise ValueError('Cart is empty.')
     c=db.c()
     try:
+        branch_id=u.get('branch_id')
+        if not branch_id:
+            branch=c.execute('SELECT id FROM branches WHERE active=1 ORDER BY id LIMIT 1').fetchone()
+            if not branch: raise ValueError('No active branch exists. Ask Administrator to register a branch.')
+            branch_id=branch['id']
+        active_branch=c.execute('SELECT id FROM branches WHERE id=? AND active=1',(branch_id,)).fetchone()
+        if not active_branch: raise ValueError('Your assigned branch is inactive. Contact Administrator.')
         total=Decimal('0'); byprod={}; lines=[]
         for item in cart:
-            p=c.execute('SELECT * FROM products WHERE id=? AND active=1',(int(item['product_id']),)).fetchone()
+            p=c.execute('''SELECT p.*,COALESCE(bs.qty,0) branch_qty,COALESCE(bs.avg_cost,p.avg_cost) branch_avg_cost,
+                           COALESCE(bs.sell_price,p.sell_price) branch_sell_price,
+                           COALESCE(bs.wholesale_price,p.wholesale_price) branch_wholesale_price
+                           FROM products p LEFT JOIN branch_stock bs ON bs.product_id=p.id AND bs.branch_id=?
+                           WHERE p.id=? AND p.active=1''',(branch_id,int(item['product_id']))).fetchone()
             if not p: raise ValueError('Product not found or inactive.')
             q=Decimal(str(item.get('qty',0)))
             if q<=0: raise ValueError('Quantity must be greater than zero.')
             byprod[p['id']]=byprod.get(p['id'],Decimal('0'))+q
-            price=float(p['wholesale_price'] or 0) if sale_type=='WHOLESALE' else float(p['sell_price'])
+            price=float(p['branch_wholesale_price'] or 0) if sale_type=='WHOLESALE' else float(p['branch_sell_price'])
             if price<=0: raise ValueError(f'{sale_type.title()} price is not configured for {p["name"]}. Set it in Product Registration.')
             lt=(q*Decimal(str(price))).quantize(Decimal('0.01'),rounding=ROUND_HALF_UP); total+=lt; lines.append((p,q,price))
         for pid,q in byprod.items():
-            p=c.execute('SELECT stock_qty FROM products WHERE id=?',(pid,)).fetchone()
-            if not p or q>Decimal(str(p['stock_qty'])): raise ValueError(f'Insufficient stock for product {pid}. Available {p["stock_qty"] if p else 0}.')
+            p=c.execute('SELECT qty FROM branch_stock WHERE branch_id=? AND product_id=?',(branch_id,pid)).fetchone()
+            if not p or q>Decimal(str(p['qty'])): raise ValueError(f'Insufficient stock for product {pid} in this branch. Available {p["qty"] if p else 0}.')
         c.execute('BEGIN')
         customer_id=None; ctype='WALK_IN'
         if customer.get('id'):
@@ -485,18 +518,14 @@ def create_sale(u, data):
             dt.date.fromisoformat(credit['due_date']); payments=[]; ctype='CREDIT'; credit_payment_mode=True
         else:
             payments=validate_payments(c,payments,total)
-        branch_id=u.get('branch_id')
-        if not branch_id:
-            branch=c.execute('SELECT id FROM branches WHERE active=1 ORDER BY id LIMIT 1').fetchone()
-            if not branch: raise ValueError('No active branch exists. Ask Administrator to register a branch.')
-            branch_id=branch['id']
         cur=c.execute('INSERT INTO sales(receipt_no,sold_at,user_id,customer_id,customer_type,total,sale_type,branch_id) VALUES(?,?,?,?,?,?,?,?)',(receipt,ts,u['id'],customer_id,ctype,float(total),sale_type,branch_id)); sid=cur.lastrowid
         current={}
         for p,q,price in lines:
-            before=current.get(p['id'],float(p['stock_qty'])); after=before-float(q); current[p['id']]=after
-            c.execute('INSERT INTO sale_lines(sale_id,product_id,qty,unit_price,unit_cost,cogs_cost_source) VALUES(?,?,?,?,?,?)',(sid,p['id'],float(q),price,p['avg_cost'],'AVERAGE_COST' if float(p['avg_cost'] or 0)>0 else 'MISSING_COST'))
-            c.execute('UPDATE products SET stock_qty=?,updated_at=? WHERE id=?',(after,ts,p['id']))
-            c.execute('INSERT INTO stock_movements(movement_time,user_id,product_id,movement_type,qty,before_qty,after_qty,unit_cost,reference) VALUES(?,?,?,?,?,?,?,?,?)',(ts,u['id'],p['id'],'SALE',float(q),before,after,p['avg_cost'],receipt))
+            before=current.get(p['id'],float(c.execute('SELECT qty FROM branch_stock WHERE branch_id=? AND product_id=?',(branch_id,p['id'])).fetchone()['qty'])); after=before-float(q); current[p['id']]=after
+            unit_cost=float(p['branch_avg_cost'] or 0)
+            c.execute('INSERT INTO sale_lines(sale_id,product_id,qty,unit_price,unit_cost,cogs_cost_source) VALUES(?,?,?,?,?,?)',(sid,p['id'],float(q),price,unit_cost,'AVERAGE_COST' if unit_cost>0 else 'MISSING_COST'))
+            c.execute('UPDATE branch_stock SET qty=?,updated_at=? WHERE branch_id=? AND product_id=?',(after,ts,branch_id,p['id']))
+            c.execute('INSERT INTO stock_movements(movement_time,user_id,product_id,movement_type,qty,before_qty,after_qty,unit_cost,reference,branch_id) VALUES(?,?,?,?,?,?,?,?,?,?)',(ts,u['id'],p['id'],'SALE',float(q),before,after,unit_cost,receipt,branch_id))
         for pmt in payments:
             c.execute('INSERT INTO sale_payments(sale_id,amount,payment_method,mpesa_code,paid_at,user_id) VALUES(?,?,?,?,?,?)',(sid,pmt['amount'],pmt['payment_method'],pmt['mpesa_code'] or None,ts,u['id']))
         if credit_payment_mode:
@@ -554,15 +583,41 @@ def live_monitoring():
 def report_data(start,end):
     c=db.c(); rows=c.execute('''SELECT s.id sale_id,s.sale_type,s.receipt_no,s.sold_at,COALESCE(cu.full_name,'Walk-in Customer') customer,s.customer_type,COALESCE(u.full_name,'') attended_by,COALESCE(SUM(sl.qty),0) units,s.total,COALESCE((SELECT SUM(amount) FROM sale_payments WHERE sale_id=s.id AND payment_method='CASH'),0) cash,COALESCE((SELECT SUM(amount) FROM sale_payments WHERE sale_id=s.id AND payment_method='MPESA'),0) mpesa FROM sales s LEFT JOIN customers cu ON cu.id=s.customer_id LEFT JOIN users u ON u.id=s.user_id LEFT JOIN sale_lines sl ON sl.sale_id=s.id WHERE s.sold_at BETWEEN ? AND ? GROUP BY s.id ORDER BY s.sold_at DESC''',(start,end)).fetchall(); c.close(); return [dict(r) for r in rows]
 
-def stock_report(start,end):
-    c=db.c(); ps=c.execute('SELECT * FROM products WHERE active=1 ORDER BY name').fetchall(); out=[]
+def stock_report(start,end,branch_id=None):
+    c=db.c()
+    if branch_id is None:
+        # All-branch view is an explicit company total, not a shared product quantity.
+        ps=c.execute('''SELECT p.*,COALESCE(SUM(bs.qty),0) stock_qty,COALESCE(AVG(bs.avg_cost),p.avg_cost) branch_cost,
+                        COALESCE(SUM(bs.qty*bs.avg_cost),0) stock_cost_value
+                        FROM products p LEFT JOIN branch_stock bs ON bs.product_id=p.id
+                        WHERE p.active=1 GROUP BY p.id ORDER BY p.name''').fetchall()
+    else:
+        ps=c.execute('''SELECT p.*,COALESCE(bs.qty,0) stock_qty,COALESCE(bs.avg_cost,p.avg_cost) branch_cost,
+                        COALESCE(bs.qty*bs.avg_cost,0) stock_cost_value
+                        FROM products p LEFT JOIN branch_stock bs ON bs.product_id=p.id AND bs.branch_id=?
+                        WHERE p.active=1 ORDER BY p.name''',(int(branch_id),)).fetchall()
+    out=[]
     totals={'retail_units':0.0,'wholesale_units':0.0,'retail_revenue':0.0,'wholesale_revenue':0.0}
     for p in ps:
-        pur=c.execute('SELECT COALESCE(SUM(pl.qty),0) q FROM purchase_lines pl JOIN purchases pu ON pu.id=pl.purchase_id WHERE pl.product_id=? AND pu.purchased_at BETWEEN ? AND ?',(p['id'],start,end)).fetchone()['q']
-        sold=c.execute('SELECT COALESCE(SUM(sl.qty),0) q FROM sale_lines sl JOIN sales s ON s.id=sl.sale_id WHERE sl.product_id=? AND s.sold_at BETWEEN ? AND ?',(p['id'],start,end)).fetchone()['q']
-        split=c.execute("SELECT COALESCE(SUM(CASE WHEN s.sale_type='RETAIL' THEN sl.qty ELSE 0 END),0) retail_units, COALESCE(SUM(CASE WHEN s.sale_type='WHOLESALE' THEN sl.qty ELSE 0 END),0) wholesale_units, COALESCE(SUM(CASE WHEN s.sale_type='RETAIL' THEN sl.qty*sl.unit_price ELSE 0 END),0) retail_revenue, COALESCE(SUM(CASE WHEN s.sale_type='WHOLESALE' THEN sl.qty*sl.unit_price ELSE 0 END),0) wholesale_revenue FROM sale_lines sl JOIN sales s ON s.id=sl.sale_id WHERE sl.product_id=? AND s.sold_at BETWEEN ? AND ?",(p['id'],start,end)).fetchone()
+        branch_clause=' AND pu.branch_id=?' if branch_id is not None else ''
+        purchase_args=(p['id'],start,end,int(branch_id)) if branch_id is not None else (p['id'],start,end)
+        pur=c.execute('SELECT COALESCE(SUM(pl.qty),0) q FROM purchase_lines pl JOIN purchases pu ON pu.id=pl.purchase_id WHERE pl.product_id=? AND pu.purchased_at BETWEEN ? AND ?'+branch_clause,purchase_args).fetchone()['q']
+        sale_clause=' AND s.branch_id=?' if branch_id is not None else ''
+        sale_args=(p['id'],start,end,int(branch_id)) if branch_id is not None else (p['id'],start,end)
+        sold=c.execute('SELECT COALESCE(SUM(sl.qty),0) q FROM sale_lines sl JOIN sales s ON s.id=sl.sale_id WHERE sl.product_id=? AND s.sold_at BETWEEN ? AND ?'+sale_clause,sale_args).fetchone()['q']
+        split=c.execute("SELECT COALESCE(SUM(CASE WHEN s.sale_type='RETAIL' THEN sl.qty ELSE 0 END),0) retail_units, COALESCE(SUM(CASE WHEN s.sale_type='WHOLESALE' THEN sl.qty ELSE 0 END),0) wholesale_units, COALESCE(SUM(CASE WHEN s.sale_type='RETAIL' THEN sl.qty*sl.unit_price ELSE 0 END),0) retail_revenue, COALESCE(SUM(CASE WHEN s.sale_type='WHOLESALE' THEN sl.qty*sl.unit_price ELSE 0 END),0) wholesale_revenue FROM sale_lines sl JOIN sales s ON s.id=sl.sale_id WHERE sl.product_id=? AND s.sold_at BETWEEN ? AND ?"+sale_clause,sale_args).fetchone()
         for k in totals: totals[k]+=float(split[k] or 0)
-        out.append({'sku':p['sku'],'name':p['name'],'category':p['category'],'stock':p['stock_qty'],'purchased':pur,'sold':sold,'sell_price':p['sell_price'],'retail_price':p['sell_price'],'wholesale_price':p['wholesale_price'],'avg_cost':p['avg_cost'],'stock_value':p['stock_qty']*p['avg_cost'],'retail_units':float(split['retail_units'] or 0),'wholesale_units':float(split['wholesale_units'] or 0),'retail_revenue':float(split['retail_revenue'] or 0),'wholesale_revenue':float(split['wholesale_revenue'] or 0),'reorder_level':p['reorder_level'],'status':'OUT OF STOCK' if p['stock_qty']<=0 else ('LOW STOCK' if p['stock_qty']<=p['reorder_level'] else 'OK')})
+        # Calculate opening and closing from this branch's movement ledger; historical shared stock is never reused.
+        movement_filter=' AND branch_id=?' if branch_id is not None else ''
+        movement_args=(p['id'],start,int(branch_id)) if branch_id is not None else (p['id'],start)
+        opening_net=c.execute("SELECT COALESCE(SUM(CASE WHEN movement_type='SALE' THEN -qty ELSE qty END),0) q FROM stock_movements WHERE product_id=? AND movement_time<?"+movement_filter,movement_args).fetchone()['q']
+        adj_clause=' AND branch_id=?' if branch_id is not None else ''
+        adj_args=(p['id'],start,end,int(branch_id)) if branch_id is not None else (p['id'],start,end)
+        adjustments=c.execute("SELECT COALESCE(SUM(CASE WHEN movement_type IN ('SALE','PURCHASE','OPENING_STOCK') THEN 0 ELSE qty END),0) q FROM stock_movements WHERE product_id=? AND movement_time BETWEEN ? AND ?"+adj_clause,adj_args).fetchone()['q']
+        opening=float(opening_net or 0); closing=opening+float(pur or 0)-float(sold or 0)+float(adjustments or 0)
+        current_qty=float(p['stock_qty'] or 0)
+        unit_cost=float(p['branch_cost'] or 0)
+        out.append({'sku':p['sku'],'name':p['name'],'category':p['category'],'stock':current_qty,'opening':opening,'purchased':pur,'sold':sold,'adjustments':float(adjustments or 0),'closing':closing,'sell_price':p['sell_price'],'retail_price':p['sell_price'],'wholesale_price':p['wholesale_price'],'avg_cost':unit_cost,'stock_value':current_qty*unit_cost,'retail_units':float(split['retail_units'] or 0),'wholesale_units':float(split['wholesale_units'] or 0),'retail_revenue':float(split['retail_revenue'] or 0),'wholesale_revenue':float(split['wholesale_revenue'] or 0),'reorder_level':p['reorder_level'],'status':'OUT OF STOCK' if current_qty<=0 else ('LOW STOCK' if current_qty<=p['reorder_level'] else 'OK')})
     for r in out:
         unit_total=r['retail_units']+r['wholesale_units']; rev_total=r['retail_revenue']+r['wholesale_revenue']
         r['retail_units_pct']=100*r['retail_units']/unit_total if unit_total else 0
