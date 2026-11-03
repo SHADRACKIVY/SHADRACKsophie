@@ -130,6 +130,6 @@ jobs:
               assert len(root.findall(".//x:v",ns)) >= 4
           pdf=app.make_pdf("CI STOCK REPORT",["Product","Opening","Purchased","Sold","Closing"],[[f"Test Product {i}",10,2,1,11] for i in range(100)])
           assert pdf.startswith(b"%PDF-1.4")
-          assert len(re.findall(rb"/Type /Page\\b",pdf)) >= 2
+          assert len(re.findall(rb"/Type /Page\b",pdf)) >= 2
           print("PASS: Settings, permissions, backup integrity, M-Pesa reconciliation, professional Excel exports and multipage PDF reports.")
           PY
