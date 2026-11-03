@@ -50,7 +50,7 @@ def stk_push(core, amount, phone, account_reference, description):
     phone=normalize_phone(phone); token=get_access_token(core)
     timestamp=dt.datetime.now().strftime('%Y%m%d%H%M%S')
     password=base64.b64encode((shortcode+passkey+timestamp).encode()).decode('ascii')
-    payload={'BusinessShortCode':shortcode,'Password':password,'Timestamp':timestamp,'TransactionType':'CustomerPayBillOnline' if _setting(core,'mpesa_shortcode_type','PAYBILL')=='PAYBILL' else 'CustomerBuyGoodsOnline','Amount':int(round(float(amount))),'PartyA':phone,'PartyB':shortcode,'PhoneNumber':phone,'CallBackURL':callback+'/api/mpesa/stk/callback','AccountReference':account_reference[:12],'TransactionDesc':description[:13] or 'KAKA LIQUOR WINES AND SPIRIT'}
+    payload={'BusinessShortCode':shortcode,'Password':password,'Timestamp':timestamp,'TransactionType':'CustomerPayBillOnline' if _setting(core,'mpesa_shortcode_type','PAYBILL')=='PAYBILL' else 'CustomerBuyGoodsOnline','Amount':int(round(float(amount))),'PartyA':phone,'PartyB':shortcode,'PhoneNumber':phone,'CallBackURL':callback+'/api/mpesa/stk/callback','AccountReference':account_reference[:12],'TransactionDesc':description[:13] or 'MONTEZ LIQUOR'}
     data=_request(_base(core)+'/mpesa/stkpush/v1/processrequest',payload,{'Authorization':'Bearer '+token,'Content-Type':'application/json','Accept':'application/json'})
     if data.get('ResponseCode') not in (None,'0',0) and not data.get('CheckoutRequestID'):
         raise MpesaError(data.get('errorMessage') or data.get('ResponseDescription') or 'STK Push was rejected.')
