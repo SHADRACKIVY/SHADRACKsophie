@@ -120,12 +120,7 @@ class DB:
         if 'branch_id' not in sales_cols:
             c.execute('ALTER TABLE sales ADD COLUMN branch_id INTEGER REFERENCES branches(id)')
         ts=now_str()
-        main=c.execute('SELECT id FROM branches WHERE active=1 ORDER BY id LIMIT 1').fetchone()
-        if not main:
-            cur=c.execute('INSERT INTO branches(name,code,location,phone,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?)',('Main Branch','MAIN','','',1,ts,ts)); main_id=cur.lastrowid
-        else: main_id=main['id']
-        c.execute('UPDATE users SET branch_id=? WHERE branch_id IS NULL',(main_id,))
-        c.execute('UPDATE sales SET branch_id=(SELECT u.branch_id FROM users u WHERE u.id=sales.user_id) WHERE branch_id IS NULL')
+        # Branches are created only through Administrator > Branch Registration; never invent a default outlet.
         c.execute('UPDATE purchases SET branch_id=(SELECT branch_id FROM users WHERE users.id=purchases.user_id) WHERE branch_id IS NULL')
         c.execute('UPDATE stock_movements SET branch_id=(SELECT branch_id FROM users WHERE users.id=stock_movements.user_id) WHERE branch_id IS NULL')
         c.execute('UPDATE expenses SET branch_id=(SELECT branch_id FROM users WHERE users.id=expenses.user_id) WHERE branch_id IS NULL')
@@ -188,11 +183,7 @@ class DB:
             # Upgrade older installations without deleting existing users/data.
             if not c.execute("SELECT 1 FROM users WHERE username='management'").fetchone():
                 t=now_str(); c.execute('INSERT INTO users(username,full_name,password_hash,role,access_role,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',('management','Management User',sha('management1234'),'SALES','MANAGEMENT',1,t,t))
-        # Newly seeded default accounts also inherit the default branch.
-        default_branch=c.execute('SELECT id FROM branches WHERE active=1 ORDER BY id LIMIT 1').fetchone()
-        if default_branch:
-            c.execute('UPDATE users SET branch_id=? WHERE branch_id IS NULL',(default_branch['id'],))
-            c.execute('UPDATE sales SET branch_id=(SELECT u.branch_id FROM users u WHERE u.id=sales.user_id) WHERE branch_id IS NULL')
+        # Administrator and Management accounts remain unassigned; Sales users must be assigned by Administrator.
         permission_defs=[
             ('VIEW_DASHBOARD','Dashboard','View the executive dashboard.'),
             ('CREATE_SALE','Sales / POS','Create and complete sales.'),
