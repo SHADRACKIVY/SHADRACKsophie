@@ -2765,6 +2765,89 @@ class Handler(BaseHTTPRequestHandler):
             if not check_csrf(self, form):
                 if path == '/customers/credit-payment': return send_json(self, {'error':'Invalid form token. Please refresh the page and try again.'},400)
                 return send_html(self, error_page('Invalid form token. Please refresh and try again.',400),400)
+            if path=='/cash-paybill-transfer':
+                try:
+                    ensure_cash_paybill_schema()
+                    action=str(form.get('action','request')).lower()
+                    role=role_name(u)
+                    c=core.db.c()
+                    try:
+                        c.execute('BEGIN IMMEDIATE')
+                        ts=now()
+                        if action=='request':
+                            submitted_branch=int(form.get('branch_id','0') or 0)
+                            branch_id=int(u.get('branch_id') or 0) if role=='SALES' else submitted_branch
+                            amount=round(float(form.get('amount','0') or 0),2)
+                            deposit_ref=str(form.get('deposit_reference','')).strip().upper()
+                            note=str(form.get('note','')).strip()
+                            if amount<=0 or len(note)<5:
+                                raise ValueError('Enter a positive amount and a reason of at least 5 characters.')
+                            if role=='SALES' and submitted_branch!=branch_id:
+                                raise PermissionError('Salespeople can request transfers only for their assigned branch.')
+                            branch=c.execute('SELECT id,name FROM branches WHERE id=? AND active=1',(branch_id,)).fetchone()
+                            if not branch:
+                                raise ValueError('Select an active registered branch.')
+                            request_no='CPB-REQ-'+dt.datetime.now().strftime('%Y%m%d%H%M%S')+'-'+secrets.token_hex(3).upper()
+                            c.execute('''INSERT INTO cash_paybill_requests(request_no,branch_id,amount,deposit_reference,note,status,requested_by,requested_at)
+                                VALUES(?,?,?,?,?,'PENDING',?,?)''',(request_no,branch_id,amount,deposit_ref,note,u['id'],ts))
+                            core.db.audit(c,u,'CASH_TO_PAYBILL_REQUEST','CASH_PAYBILL_REQUEST',request_no,f'branch={branch["name"]}; amount={amount:.2f}; deposit_reference={deposit_ref}; status=PENDING; balances_unchanged')
+                            c.commit()
+                            add_flash(session_token(self),f'Request {request_no} submitted as PENDING. No balances have changed.','success')
+                        elif action in ('approve','reject'):
+                            if role not in ('ADMIN','MANAGEMENT'):
+                                raise PermissionError('Only Management or Administrator can approve or reject transfer requests.')
+                            request_id=int(form.get('request_id','0') or 0)
+                            row=c.execute('SELECT r.*,b.name branch_name FROM cash_paybill_requests r JOIN branches b ON b.id=r.branch_id WHERE r.id=?',(request_id,)).fetchone()
+                            if not row:
+                                raise ValueError('Transfer request was not found.')
+                            if row['status']!='PENDING':
+                                raise ValueError('This request has already been reviewed and cannot be posted again.')
+                            if int(row['requested_by'])==int(u['id']):
+                                raise PermissionError('You cannot approve your own transfer request.')
+                            review_note=str(form.get('review_note','')).strip()
+                            if action=='reject':
+                                if len(review_note)<5:
+                                    raise ValueError('Enter a rejection reason of at least 5 characters.')
+                                cur=c.execute('UPDATE cash_paybill_requests SET status="REJECTED",reviewed_by=?,reviewed_at=?,review_note=? WHERE id=? AND status="PENDING"',(u['id'],ts,review_note,request_id))
+                                if cur.rowcount!=1:
+                                    raise ValueError('This request has already been reviewed.')
+                                core.db.audit(c,u,'CASH_TO_PAYBILL_REJECT','CASH_PAYBILL_REQUEST',row['request_no'],f'branch={row["branch_name"]}; amount={float(row["amount"]):.2f}; reason={review_note}')
+                                c.commit()
+                                add_flash(session_token(self),f'Request {row["request_no"]} rejected. No balances changed.','success')
+                            else:
+                                amount=round(float(row['amount']),2)
+                                available=financial_statement_data('CASH','1900-01-01 00:00:00','2999-12-31 23:59:59',int(row['branch_id']),c)['closing']
+                                if amount>available:
+                                    raise ValueError(f'Insufficient recorded cash in {row["branch_name"]}. Available: {money(available)}. Request remains pending.')
+                                deposit_ref=str(row['deposit_reference'] or '').strip().upper()
+                                if deposit_ref:
+                                    duplicate=c.execute("""SELECT 1 FROM financial_transfers WHERE UPPER(mpesa_code)=?
+                                        UNION ALL SELECT 1 FROM sale_payments WHERE UPPER(COALESCE(mpesa_code,''))=?
+                                        UNION ALL SELECT 1 FROM credit_payments WHERE UPPER(COALESCE(mpesa_code,''))=?
+                                        UNION ALL SELECT 1 FROM mpesa_stk_requests WHERE UPPER(COALESCE(mpesa_code,''))=?""",(deposit_ref,deposit_ref,deposit_ref,deposit_ref)).fetchone()
+                                    if duplicate:
+                                        raise ValueError('This M-Pesa/deposit reference has already been used. Correct the reference before approval.')
+                                transfer_no='TRF-'+dt.datetime.now().strftime('%Y%m%d%H%M%S')+'-'+secrets.token_hex(3).upper()
+                                transfer_code=deposit_ref or ('INT'+secrets.token_hex(8).upper())
+                                c.execute('''INSERT INTO financial_transfers(transfer_no,branch_id,amount,mpesa_code,deposit_reference,note,created_at,created_by)
+                                    VALUES(?,?,?,?,?,?,?,?)''',(transfer_no,int(row['branch_id']),amount,transfer_code,deposit_ref,('Approved request '+row['request_no']+': '+str(row['note']))[:250],ts,u['id']))
+                                cur=c.execute('''UPDATE cash_paybill_requests SET status='APPROVED',reviewed_by=?,reviewed_at=?,review_note=?,transfer_no=?,posted_at=?
+                                    WHERE id=? AND status='PENDING' ''',(u['id'],ts,review_note,transfer_no,ts,request_id))
+                                if cur.rowcount!=1:
+                                    raise ValueError('This request was already processed; no duplicate transfer was posted.')
+                                core.db.audit(c,u,'CASH_TO_PAYBILL_APPROVE','CASH_PAYBILL_REQUEST',row['request_no'],f'transfer_no={transfer_no}; branch={row["branch_name"]}; amount={amount:.2f}; requested_by={row["requested_by"]}; approved_by={u["id"]}; cash_decreased={amount:.2f}; paybill_increased={amount:.2f}; no_revenue_or_expense_impact')
+                                c.commit()
+                                add_flash(session_token(self),f'Request {row["request_no"]} approved. Cash decreased and Paybill increased by {money(amount)}.','success')
+                        else:
+                            raise ValueError('Unknown transfer request action.')
+                    except Exception:
+                        c.rollback()
+                        raise
+                    finally:
+                        c.close()
+                    return redirect(self,'/cash-paybill-transfer')
+                except Exception as e:
+                    return send_html(self,cash_paybill_transfer_page(u,str(e)),400)
             if path=='/ai':
                 try:
                     require_perm_user(u,'AI_ASSISTANT'); q=form.get('question','').strip()
