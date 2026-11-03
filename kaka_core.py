@@ -104,11 +104,7 @@ class DB:
         c.execute('UPDATE purchases SET branch_id=(SELECT branch_id FROM users WHERE users.id=purchases.user_id) WHERE branch_id IS NULL')
         c.execute('UPDATE stock_movements SET branch_id=(SELECT branch_id FROM users WHERE users.id=stock_movements.user_id) WHERE branch_id IS NULL')
         c.execute('UPDATE expenses SET branch_id=(SELECT branch_id FROM users WHERE users.id=expenses.user_id) WHERE branch_id IS NULL')
-        # Create zeroed branch balances. Do not duplicate old shared quantities into every outlet.
-        for br in c.execute('SELECT id FROM branches').fetchall():
-            for pr in c.execute('SELECT id,avg_cost,sell_price,wholesale_price,reorder_level FROM products').fetchall():
-                c.execute('INSERT OR IGNORE INTO branch_stock(branch_id,product_id,qty,avg_cost,buy_price,sell_price,wholesale_price,reorder_level,updated_at) VALUES(?,?,0,?,?,?,?,?,?)',
-                    (br['id'],pr['id'],float(pr['avg_cost'] or 0),float(pr['avg_cost'] or 0),float(pr['sell_price'] or 0),float(pr['wholesale_price'] or pr['sell_price'] or 0),float(pr['reorder_level'] or 0),now_str()))
+        # Branch stock rows are initialized after legacy product columns have been upgraded.
         c.execute('CREATE INDEX IF NOT EXISTS idx_branch_stock_product ON branch_stock(product_id,branch_id)')
         c.execute('CREATE INDEX IF NOT EXISTS idx_movements_branch_time ON stock_movements(branch_id,movement_time)')
         c.execute('CREATE INDEX IF NOT EXISTS idx_purchases_branch_date ON purchases(branch_id,purchased_at)')
@@ -119,6 +115,7 @@ class DB:
         sales_cols={r['name'] for r in c.execute('PRAGMA table_info(sales)').fetchall()}
         if 'branch_id' not in sales_cols:
             c.execute('ALTER TABLE sales ADD COLUMN branch_id INTEGER REFERENCES branches(id)')
+        c.execute('UPDATE sales SET branch_id=(SELECT branch_id FROM users WHERE users.id=sales.user_id) WHERE branch_id IS NULL')
         ts=now_str()
         # Branches are created only through Administrator > Branch Registration; never invent a default outlet.
         c.execute('UPDATE purchases SET branch_id=(SELECT branch_id FROM users WHERE users.id=purchases.user_id) WHERE branch_id IS NULL')
@@ -177,6 +174,12 @@ class DB:
             c.execute("ALTER TABLE products ADD COLUMN product_no TEXT")
         c.execute("UPDATE products SET product_no='PRD-' || printf('%05d',id) WHERE product_no IS NULL OR product_no=''")
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_products_product_no ON products(product_no)")
+        # Create zeroed branch balances only after all legacy product columns are present.
+        # Old shared product.stock_qty is intentionally not copied into any branch.
+        for br in c.execute('SELECT id FROM branches').fetchall():
+            for pr in c.execute('SELECT id,avg_cost,sell_price,wholesale_price,reorder_level FROM products').fetchall():
+                c.execute('INSERT OR IGNORE INTO branch_stock(branch_id,product_id,qty,avg_cost,buy_price,sell_price,wholesale_price,reorder_level,updated_at) VALUES(?,?,0,?,?,?,?,?,?)',
+                    (br['id'],pr['id'],float(pr['avg_cost'] or 0),float(pr['avg_cost'] or 0),float(pr['sell_price'] or 0),float(pr['wholesale_price'] or pr['sell_price'] or 0),float(pr['reorder_level'] or 0),now_str()))
         if c.execute('SELECT COUNT(*) n FROM users').fetchone()['n']==0:
             t=now_str(); c.execute('INSERT INTO users(username,full_name,password_hash,role,access_role,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',('admin','System Administrator',sha('admin1234'),'ADMIN','ADMIN',1,t,t)); c.execute('INSERT INTO users(username,full_name,password_hash,role,access_role,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',('sales','Sales Person',sha('sales1234'),'SALES','SALES',1,t,t)); c.execute('INSERT INTO users(username,full_name,password_hash,role,access_role,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',('management','Management User',sha('management1234'),'SALES','MANAGEMENT',1,t,t))
         else:
