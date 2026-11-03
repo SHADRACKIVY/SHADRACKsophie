@@ -687,22 +687,21 @@ def stock_transfer_action(u, form):
 
 def admin_set_cost(u, form):
     if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
-    pid=int(form.get('product_id','0') or 0); new_cost=float(form.get('new_avg_cost','-1') or -1); reason=form.get('reason','').strip()
-    if pid<=0 or new_cost<=0 or not reason: raise ValueError('Enter a positive average unit cost and a reason.')
+    pid=int(form.get('product_id','0') or 0); branch_id=int(form.get('branch_id','0') or 0); new_cost=float(form.get('new_avg_cost','-1') or -1); reason=form.get('reason','').strip()
+    if pid<=0 or branch_id<=0 or new_cost<=0 or len(reason)<5: raise ValueError('Select a branch and product, enter a positive average unit cost, and give a reason of at least 5 characters.')
     c=core.db.c()
     try:
-        c.execute('BEGIN IMMEDIATE'); p=c.execute('SELECT * FROM products WHERE id=?',(pid,)).fetchone()
-        if not p: raise ValueError('Product not found.')
-        ts=now(); qty=float(p['stock_qty'])
-        c.execute('UPDATE products SET avg_cost=?,updated_at=? WHERE id=?',(new_cost,ts,pid))
-        c.execute('INSERT INTO stock_movements(movement_time,user_id,product_id,movement_type,qty,before_qty,after_qty,unit_cost,reference) VALUES(?,?,?,?,?,?,?,?,?)',(ts,u['id'],pid,'COST_ADJUSTMENT',0,qty,qty,new_cost,reason))
-        core.db.audit(c,u,'UPDATE','PRODUCT COST',pid,f'{p["product_no"]} avg_cost {float(p["avg_cost"]):.2f} -> {new_cost:.2f}; {reason}')
+        c.execute('BEGIN IMMEDIATE')
+        bs=c.execute('SELECT bs.*,p.name,p.product_no FROM branch_stock bs JOIN products p ON p.id=bs.product_id WHERE bs.branch_id=? AND bs.product_id=?',(branch_id,pid)).fetchone()
+        if not bs: raise ValueError('Product has no stock record in the selected branch.')
+        ts=now(); qty=float(bs['qty'] or 0); old=float(bs['avg_cost'] or 0)
+        c.execute('UPDATE branch_stock SET avg_cost=?,buy_price=?,updated_at=? WHERE branch_id=? AND product_id=?',(new_cost,new_cost,ts,branch_id,pid))
+        c.execute('INSERT INTO stock_movements(movement_time,user_id,product_id,movement_type,qty,before_qty,after_qty,unit_cost,reference,branch_id) VALUES(?,?,?,?,?,?,?,?,?,?)',(ts,u['id'],pid,'COST_ADJUSTMENT',0,qty,qty,new_cost,reason,branch_id))
+        core.db.audit(c,u,'UPDATE','BRANCH PRODUCT COST',f'{branch_id}:{pid}',f'{bs["name"]} avg_cost {old:.2f} -> {new_cost:.2f}; reason={reason}')
         c.commit()
     except Exception:
         c.rollback(); raise
     finally: c.close()
-
-
 def admin_product_delete(u, product_id, restore=False, reason=''):
     if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
     reason=str(reason).strip()
@@ -1456,7 +1455,7 @@ def products_page(u, message='', query=None):
         extra=f'''<section class="card" style="margin-top:14px"><div class="notice"><b>QUICK STOCK EDIT:</b> Edit any number of retail prices, wholesale prices, COGS/unit costs and reorder levels, then click SAVE ALL STOCK CHANGES once. No confirmation or reason is required; the system records an automatic audit note. Stock quantities are preserved and adjusted separately.</div><form method="post" action="/products" id="bulk-stock-edit">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="bulk_save"><input type="hidden" name="branch_id" value="{branch_id}">{bulk_table}<div class="actions" style="margin-top:14px"><button class="btn gold" type="submit">SAVE ALL STOCK CHANGES</button><button class="btn" type="reset">CANCEL UNSAVED CHANGES</button></div></form><h3 style="margin-top:24px">Separate Stock Quantity / Product Status Actions</h3><p class="muted">Use these only when you need to correct physical stock or archive/restore a product. They require their own reason to preserve the stock audit trail.</p>{action_table}</section>'''
         title='Product Registration & Branch Stock Editor'; subtitle='Edit costs and prices for the selected branch'
     else:
-        table=html_table(['Product Name','SKU','Category','Unit','Retail / Wholesale Price','Stock','Reorder','Status'],[[esc(r['name']),esc(r['sku']),esc(r['category']),esc(r['unit']),money(r['sell_price'])+' / '+money(r.get('wholesale_price') or r['sell_price']),r['branch_qty'],r['reorder_level'],'ACTIVE' if r['active'] else 'ARCHIVED'] for r in rows])
+        table=html_table(['Product Name','SKU','Category','Unit','Retail / Wholesale Price','Stock','Reorder','Status'],[[esc(r['name']),esc(r['sku']),esc(r['category']),esc(r['unit']),money(r['branch_sell_price'])+' / '+money(r.get('branch_wholesale_price') or r['branch_sell_price']),r['branch_qty'],r['branch_reorder'],'ACTIVE' if r['active'] else 'ARCHIVED'] for r in rows])
         extra=f'<section class="card" style="margin-top:14px"><div class="notice">Sales Person can register products with separate retail and wholesale prices. Both prices draw from the same shared stock; existing prices and stock costs can only be changed by the Administrator.</div>{table}</section>'
         title='Product Registration'; subtitle='Sales Person product registration access'
     product_opening_opts=''.join(f'<option value="{r["id"]}">{esc(r["name"])} · {esc(r["sku"])}</option>' for r in rows if r['active'])
@@ -2534,7 +2533,7 @@ class Handler(BaseHTTPRequestHandler):
                 c=core.db.c(); found=c.execute('SELECT id,full_name FROM customers WHERE id=? AND active=1'+(' AND branch_id=?' if role_name(u) not in ('ADMIN','MANAGEMENT') else ''),(cid,int(u.get('branch_id') or 0)) if role_name(u) not in ('ADMIN','MANAGEMENT') else (cid,)).fetchone(); c.close()
                 if not found: raise ValueError('Selected customer was not found in your branch.')
                 add_flash(session_token(self),f'Existing customer {found["full_name"]} saved for this sale.','success')
-                return redirect(self,'/sales?customer_id='+str(cid))
+                return redirect(self,'/sales?customer_id='+str(cid)+'&branch_id='+str(branch_id))
             customer_mode=form.get('customer_mode','WALK_IN').upper(); sale_type=form.get('sale_type','RETAIL').upper()
             if sale_type not in ('RETAIL','WHOLESALE'): raise ValueError('Select Retail or Wholesale sale type.')
             cart=[]; total_expected=0.0; pid=0; qty=0
@@ -2592,7 +2591,7 @@ class Handler(BaseHTTPRequestHandler):
             add_flash(session_token(self),f'Sale {d["receipt_no"]} saved successfully. Total {money(d["total"])}','success')
             return redirect(self,'/sales')
         except Exception as e:
-            return send_html(self,sales_page(u,str(e)),400)
+            return send_html(self,sales_page(u,str(e),query={'branch_id':str(branch_id) if 'branch_id' in locals() else ''}),400)
     def credit_payment_post(self,u,form):
         require_perm_user(u,'MANAGE_CUSTOMERS')
         c=None
