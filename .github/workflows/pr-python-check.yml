@@ -22,7 +22,7 @@ jobs:
           shutil.rmtree(os.environ['KAKA_DATA_DIR'], ignore_errors=True)
           import kaka_core as core
           import kaka_liquor_app as app
-          from kaka_liquor_app import save_user, admin_edit_user, layout
+          from kaka_liquor_app import save_user, save_supplier, admin_edit_user, layout
           c=core.db.c()
           ts=core.now_str()
           bid=c.execute("INSERT INTO branches(name,code,created_at,updated_at) VALUES(?,?,?,?)",("Role Test Branch","ROLE-01",ts,ts)).lastrowid
@@ -60,9 +60,15 @@ jobs:
               pass
           manager_id=save_user(admin,{"username":"ci_role_manager","full_name":"CI Role Manager","password":"manager-test-pass","role":"MANAGEMENT","branch_id":""})
           sales_id=save_user(admin,{"username":"ci_role_sales","full_name":"CI Role Sales","password":"sales-test-pass","role":"SALES","branch_id":str(bid)})
-          core.update_permissions(admin,{"roles":{"MANAGEMENT":{"VIEW_STOCK":True,"VIEW_REPORTS":False,"MANAGE_SETTINGS":True,"MANAGE_PRODUCTS":True},"SALES":{"CREATE_SALE":True,"MANAGE_USERS":True}},"users":{}})
+          core.update_permissions(admin,{"roles":{"MANAGEMENT":{"VIEW_STOCK":True,"VIEW_REPORTS":False,"MANAGE_SETTINGS":True,"MANAGE_PRODUCTS":True},"SALES":{"CREATE_SALE":True,"CREATE_PURCHASE":True,"MANAGE_USERS":True}},"users":{}})
           manager={"id":manager_id,"username":"ci_role_manager","full_name":"CI Role Manager","access_role":"MANAGEMENT","role":"SALES","branch_id":None}
           sales={"id":sales_id,"username":"ci_role_sales","full_name":"CI Role Sales","access_role":"SALES","role":"SALES","branch_id":bid}
+          # Supplier directory is branch-scoped and available to purchasing staff.
+          supplier_id=save_supplier(sales,{"name":"CI Registered Supplier","phone":"0700000000"})
+          c=core.db.c()
+          supplier_row=c.execute("SELECT name,branch_id FROM suppliers WHERE id=?",(supplier_id,)).fetchone()
+          assert supplier_row["name"]=="CI Registered Supplier" and supplier_row["branch_id"]==bid
+          c.close()
           # Simulate a stale disabled override from an older deployment; startup migration must re-enable it.
           c=core.db.c()
           c.execute("INSERT INTO user_permissions(user_id,key,enabled) VALUES(?,?,0) ON CONFLICT(user_id,key) DO UPDATE SET enabled=0",(manager_id,"MANAGE_PRODUCTS"))
@@ -72,7 +78,14 @@ jobs:
           assert core.effective_permissions(manager)["VIEW_STOCK"] is True
           assert core.effective_permissions(manager)["MANAGE_PRODUCTS"] is True
           app.CURRENT_HANDLER=type("FakeHandler",(),{"headers":{}})()
-          assert "SAVE PRODUCT" in app.products_page(manager,query={"branch_id":str(bid)})
+          product_page=app.products_page(manager,query={"branch_id":str(bid),"search":"CI Backup"})
+          assert "SAVE PRODUCT" in product_page and "Search all registered products" in product_page
+          assert "SKU" not in product_page
+          assert "Search all products" in app.sales_page(sales,query={"branch_id":str(bid)})
+          assert "SKU" not in app.sales_page(sales,query={"branch_id":str(bid)})
+          assert "Search all products" in app.purchase_page(sales,query={"branch_id":str(bid)})
+          assert "SKU" not in app.purchase_page(sales,query={"branch_id":str(bid)})
+          assert "CI Registered Supplier" in app.suppliers_page(sales,query={"branch_id":str(bid)})
           assert core.effective_permissions(manager)["VIEW_REPORTS"] is False
           assert core.effective_permissions(manager)["MANAGE_SETTINGS"] is False
           assert core.effective_permissions(sales)["CREATE_SALE"] is True
@@ -101,6 +114,8 @@ jobs:
           c=core.db.c()
           c.execute("INSERT INTO products(sku,name,category,unit,sell_price,wholesale_price,avg_cost,stock_qty,reorder_level,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",("CI-SKU-001","CI Backup Product","Test","bottle",100,90,60,5,2,1,core.now_str(),core.now_str()))
           c.commit(); c.close()
+          assert "CI Backup Product" in app.products_page(manager,query={"branch_id":str(bid),"search":"CI Backup"})
+          assert "CI Backup Product" not in app.products_page(manager,query={"branch_id":str(bid),"search":"no-such-product"})
           # A backup download must be a readable, integrity-checked SQLite snapshot with a manifest.
           import io, sqlite3, json
           fake=object.__new__(app.Handler)
@@ -120,6 +135,7 @@ jobs:
           manifest=snap.execute("SELECT app_name,login_accounts,business_activity_rows,row_counts_json,integrity_check FROM backup_manifest WHERE id=1").fetchone()
           assert manifest[0]=="MONTEZ LIQUOR" and manifest[1]>=2 and manifest[2]>=1 and manifest[4]=="ok"
           assert json.loads(manifest[3])["products"]>=1
+          assert json.loads(manifest[3])["suppliers"]>=1
           assert snap.execute("SELECT COUNT(*) FROM users WHERE password_hash IS NULL OR password_hash=''").fetchone()[0]==0
           snap.close()
           # Empty databases must never be presented as complete business backups.
