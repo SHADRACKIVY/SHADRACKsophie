@@ -714,7 +714,7 @@ def stock_report(start,end,branch_id=None):
         # Calculate opening and closing from this branch's movement ledger; historical shared stock is never reused.
         movement_filter=' AND branch_id=?' if branch_id is not None else ''
         movement_args=(p['id'],start,int(branch_id)) if branch_id is not None else (p['id'],start)
-        opening_net=c.execute("SELECT COALESCE(SUM(CASE WHEN movement_type='SALE' THEN -qty ELSE qty END),0) q FROM stock_movements WHERE product_id=? AND (movement_time<? OR movement_type='OPENING_STOCK')"+movement_filter,movement_args).fetchone()['q']
+        opening_net=c.execute("SELECT COALESCE(SUM(CASE WHEN movement_type='SALE' THEN -qty ELSE qty END),0) q FROM stock_movements WHERE product_id=? AND movement_time<?"+movement_filter,movement_args).fetchone()['q']
         adj_clause=' AND branch_id=?' if branch_id is not None else ''
         adj_args=(p['id'],start,end,int(branch_id)) if branch_id is not None else (p['id'],start,end)
         adjustments=c.execute("SELECT COALESCE(SUM(CASE WHEN movement_type IN ('SALE','PURCHASE','OPENING_STOCK') THEN 0 ELSE qty END),0) q FROM stock_movements WHERE product_id=? AND movement_time BETWEEN ? AND ?"+adj_clause,adj_args).fetchone()['q']
