@@ -1518,14 +1518,14 @@ def export_ledger_v2(handler,u,qs):
     require_perm_user(u,'VIEW_LEDGER'); require_perm_user(u,'PRINT_EXPORT')
     start=_qsval(qs,'start'); end=_qsval(qs,'end'); fmt=_qsval(qs,'format','xlsx').lower()
     if not start or not end: raise ValueError('Report period is missing.')
-    rows=core.ledger_data(start,end); headers=['Date & Time','Reference','Description','Debit Account','Debit','Credit Account','Credit']
+    bid=branch_scope_for(u,qs); rows=core.ledger_data(start,end,bid); headers=['Date & Time','Reference','Description','Debit Account','Debit','Credit Account','Credit']
     st=core.get_settings(); out,ctype,fn=_export_rows(f"{st.get('business_name',APP_NAME)} · {st.get('business_branch_name','')} · GENERAL LEDGER",headers,rows,fmt); return send_file(handler,out,ctype,fn)
 
 def export_pl_v2(handler,u,qs):
     require_perm_user(u,'VIEW_LEDGER'); require_perm_user(u,'PRINT_EXPORT')
     start=_qsval(qs,'start'); end=_qsval(qs,'end'); fmt=_qsval(qs,'format','xlsx').lower()
     if not start or not end: raise ValueError('Report period is missing.')
-    d=core.pl_summary(start,end); rows=[['Sales Revenue',d['revenue']],['Cost of Goods Sold',d['cogs']],['Gross Profit',d['gross_profit']],['Operating Expenses',d['expenses']],['Net Profit',d['net_profit']],['COGS Reliable Cost Coverage (%)',round(d['cogs_coverage_pct'],2)],['Sale Lines Missing Cost',d['cogs_missing_lines']],['Sale Lines Using Estimated Cost',d['cogs_estimated_lines']]]
+    bid=branch_scope_for(u,qs); d=core.pl_summary(start,end,bid); rows=[['Sales Revenue',d['revenue']],['Cost of Goods Sold',d['cogs']],['Gross Profit',d['gross_profit']],['Operating Expenses',d['expenses']],['Net Profit',d['net_profit']],['COGS Reliable Cost Coverage (%)',round(d['cogs_coverage_pct'],2)],['Sale Lines Missing Cost',d['cogs_missing_lines']],['Sale Lines Using Estimated Cost',d['cogs_estimated_lines']]]
     headers=['Profit & Loss Item','Amount / Count']; st=core.get_settings(); out,ctype,fn=_export_rows(f"{st.get('business_name',APP_NAME)} · {st.get('business_branch_name','')} · PROFIT AND LOSS",headers,rows,fmt); return send_file(handler,out,ctype,fn)
 
 def mpesa_test_connection(u):
