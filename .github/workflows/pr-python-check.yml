@@ -37,7 +37,7 @@ jobs:
           assert core.get_setting("subscription_paybill")=="123456"
           assert core.get_setting("subscription_account")=="ABC123"
           try:
-              core.create_sale({"id":admin_id,"username":"testadmin","access_role":"ADMIN","role":"ADMIN"},{"credit":{}})
+              core.create_sale({"id":admin_id,"username":"testadmin","access_role":"ADMIN","role":"ADMIN"},{"credit":{"due_date":"2027-01-10","collateral":"test"}})
               raise AssertionError("Credit sale was accepted while disabled.")
           except ValueError as e:
               assert "Credit sales are disabled" in str(e)
