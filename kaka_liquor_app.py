@@ -1033,11 +1033,12 @@ def sales_dashboard(u):
     return layout(u,'Sales Dashboard',content,'/sales-dashboard')
 
 
-def sales_page(u, message='', search_query='', search_results=None, selected_customer_id=None):
+def sales_page(u, message='', search_query='', search_results=None, selected_customer_id=None, query=None):
     require_perm_user(u,'CREATE_SALE')
+    branch_id=branch_scope_for(u,query)
     max_payments=max(1,min(5,int(float(core.get_setting('max_payment_transactions','5')))))
     default_payment_count=max(1,min(max_payments,int(float(core.get_setting('default_payment_transactions','1')))))
-    ps=core.products(u.get('branch_id'))
+    ps=core.products(branch_id) if branch_id is not None else []
     product_opts=''.join(f'<option value="{p["id"]}" data-retail-price="{float(p["sell_price"]):.2f}" data-wholesale-price="{float(p.get('wholesale_price') or p['sell_price']):.2f}" data-sku="{esc(p.get("sku",""))}">{esc(p["name"])} · Retail {money(p["sell_price"])} / Wholesale {money(p.get('wholesale_price') or p['sell_price'])} · Stock {p["stock_qty"]}</option>' for p in ps) or '<option value="">No products registered</option>'
     bid=branch_scope_for(u); c=core.db.c(); sale_scope=' WHERE s.branch_id=?' if bid is not None else ''; sale_args=(int(bid),) if bid is not None else ()
     rows=c.execute("SELECT s.receipt_no,s.sold_at,s.customer_type,s.sale_type,s.total,s.branch_id,COALESCE(cu.full_name,'Walk-in Customer') customer,COALESCE(u.full_name,'') user_name FROM sales s LEFT JOIN customers cu ON cu.id=s.customer_id LEFT JOIN users u ON u.id=s.user_id"+sale_scope+" ORDER BY s.id DESC LIMIT 100",sale_args).fetchall(); c.close()
@@ -1060,9 +1061,16 @@ def sales_page(u, message='', search_query='', search_results=None, selected_cus
             if sc:
                 selected_customer_id_val=str(sc['id']); selected_customer_html=f'<div class="selected-customer"><b>SAVED CUSTOMER</b><div>{esc(sc["full_name"])} · {esc(sc["phone"])}</div><div class="muted">ID: {esc(sc["id_no"] or "—")} · {esc(sc["address"] or "")}</div></div>'
     notice=f'<div class="flash error">{esc(message)}</div>' if message else ''
+    if role_name(u) in ('ADMIN','MANAGEMENT'):
+        c=core.db.c(); active_branches=[dict(b) for b in c.execute('SELECT id,name FROM branches WHERE active=1 ORDER BY name').fetchall()]; c.close()
+        branch_field='<div><label>Sale Branch *</label><select name="branch_id" required><option value="">Select branch</option>'+''.join(f'<option value="{b["id"]}" {"selected" if branch_id==int(b["id"]) else ""}>{esc(b["name"])}</option>' for b in active_branches)+'</select></div>'
+        branch_selector=branch_scope_selector(u,query,'/sales')
+    else:
+        branch_field=f'<input type="hidden" name="branch_id" value="{branch_id}">'; branch_selector=''
     content='''__NOTICE__
 <form method="post" action="/sales" class="pos-grid" id="sales_form">
 __CSRF__
+__BRANCH_FIELD__
 <input type="hidden" name="customer_id" id="selected_customer_id" value="__SELECTED_CUSTOMER_ID__"><input type="hidden" name="mpesa_batch_id" id="mpesa_batch_id" value="">
 <div>
 <section class="card"><div class="section-head"><h2>New Sale</h2><span class="pill">ATTENDED BY: __FULL_NAME__</span></div>
@@ -1098,8 +1106,8 @@ function escapeHtml(v){return String(v).replace(/[&<>"']/g,function(c){return {'
 window.addEventListener('DOMContentLoaded',function(){renderPaymentRows();showRegisteredPrice();toggleCustomerMode();if(document.getElementById('selected_customer_id').value){document.getElementById('customer_mode').value='CREDIT';document.querySelector('input[value="EXISTING"]').checked=true;toggleCustomerMode();toggleCreditChoice();}var form=document.getElementById('sales_form');if(form){form.addEventListener('submit',function(ev){var mode=document.getElementById('customer_mode').value;if(mode==='CREDIT'){if(!document.getElementById('due_date').value||!document.getElementById('collateral').value.trim()){ev.preventDefault();alert('Credit invoices require a due date and collateral details.');return;}}else{var count=parseInt(document.getElementById('payment_count').value||'1',10);for(var i=1;i<=count;i++){var m=document.getElementById('payment_method_'+i),c=document.getElementById('mpesa_code_'+i);if(m&&m.value==='MPESA'&&c&&!c.value.trim()){ev.preventDefault();c.required=true;c.focus();alert('Enter the M-Pesa transaction code for every M-Pesa payment.');return;}}}});}});
 </script>'''
     recent=html_table(['Date & Time','Receipt','Customer','Type','Total','Recorded By','Actions'],[[esc(r['sold_at']),esc(r['receipt_no']),esc(r['customer']),esc(r['customer_type']+' · '+r['sale_type']),money(r['total']),esc(r['user_name']),f'<div class="inline-actions"><a class="btn" href="/sales/receipt?receipt={quote(r["receipt_no"])}">OPEN INVOICE / VIEW</a><a class="btn" href="/sales/export?receipt={quote(r["receipt_no"])}&format=pdf">PDF</a><a class="btn" href="/sales/export?receipt={quote(r["receipt_no"])}&format=xlsx">EXCEL</a></div>'] for r in rows])
-    content=content.replace('__NOTICE__',notice).replace('__CSRF__',csrf_input(CURRENT_HANDLER)).replace('__FULL_NAME__',esc(u['full_name'])).replace('__PRODUCT_OPTS__',product_opts).replace('__SEARCH_QUERY__',esc(search_query)).replace('__RESULT_HTML__',result_html).replace('__PAYMENTS__',payments).replace('__PAYMENT_OPTIONS__',''.join(f'<option value="{i}" {"selected" if i==default_payment_count else ""}>{i}</option>' for i in range(1,max_payments+1))).replace('__MAX_PAYMENTS__',str(max_payments)).replace('__MAX_TX__',str(max_payments)).replace('__RECENT_SALES__',recent).replace('__SELECTED_CUSTOMER_ID__',selected_customer_id_val).replace('__SELECTED_CUSTOMER_HTML__',selected_customer_html)
-    return layout(u,'Sales / POS',content,'/sales','Direct sales entry')
+    content=content.replace('__NOTICE__',notice).replace('__CSRF__',csrf_input(CURRENT_HANDLER)).replace('__BRANCH_FIELD__',branch_field).replace('__FULL_NAME__',esc(u['full_name'])).replace('__PRODUCT_OPTS__',product_opts).replace('__SEARCH_QUERY__',esc(search_query)).replace('__RESULT_HTML__',result_html).replace('__PAYMENTS__',payments).replace('__PAYMENT_OPTIONS__',''.join(f'<option value="{i}" {"selected" if i==default_payment_count else ""}>{i}</option>' for i in range(1,max_payments+1))).replace('__MAX_PAYMENTS__',str(max_payments)).replace('__MAX_TX__',str(max_payments)).replace('__RECENT_SALES__',recent).replace('__SELECTED_CUSTOMER_ID__',selected_customer_id_val).replace('__SELECTED_CUSTOMER_HTML__',selected_customer_html)
+    return layout(u,'Sales / POS',branch_selector+content,'/sales','Direct sales entry')
 
 
 def sale_detail(receipt):
@@ -1728,7 +1736,7 @@ def mpesa_confirm_direct_payment(u, form):
             return {'ok':False,'partial':True,'message':f'Payment found so far: {money(accumulated)}. Remaining: {money(round(total-accumulated,2))}. Press CONFIRM PAYMENT again after the customer sends the remaining amount.','matched':accumulated,'remaining':round(total-accumulated,2),'transactions':[dict(r) for r in selected]}
         codes=[str(r['trans_id']).strip().upper() for r in selected]
         payments=[{'amount':float(r['amount']),'payment_method':'MPESA','mpesa_code':code} for r,code in zip(selected,codes)]
-        d=core.create_sale(u,{'cart':cart,'payments':payments,'customer':{},'credit':None,'sale_type':sale_type})
+        d=core.create_sale(u,{'cart':cart,'payments':payments,'customer':{},'credit':None,'sale_type':sale_type,'branch_id':branch_id})
         c2=core.db.c()
         try:
             for code in codes:
@@ -2336,7 +2344,7 @@ class Handler(BaseHTTPRequestHandler):
                     return send_html(self, routes[path](u, query=qs))
                 if path in ('/expense-report','/ledger','/profit-loss','/reorder-report','/live'):
                     return send_html(self, routes[path](u, qs))
-                if path=='/sales': return send_html(self,sales_page(u, selected_customer_id=_qsval(qs,'customer_id','') or None))
+                if path=='/sales': return send_html(self,sales_page(u, selected_customer_id=_qsval(qs,'customer_id','') or None, query=qs))
                 return send_html(self,routes[path](u))
             return send_html(self,error_page('Not found',404),404)
         except PermissionError as e:
@@ -2496,6 +2504,10 @@ class Handler(BaseHTTPRequestHandler):
     def sales_post(self,u,form):
         require_perm_user(u,'CREATE_SALE')
         try:
+            role=role_name(u); branch_id=(int(form.get('branch_id') or 0) if role in ('ADMIN','MANAGEMENT') else int(u.get('branch_id') or 0))
+            if not branch_id: raise ValueError('Select an active branch before making a sale.')
+            c=core.db.c(); active_branch=c.execute('SELECT 1 FROM branches WHERE id=? AND active=1',(branch_id,)).fetchone(); c.close()
+            if not active_branch: raise ValueError('Selected branch is inactive or unavailable.')
             customer_action=form.get('customer_action','').upper()
             if customer_action=='SAVE_NEW_CUSTOMER':
                 name=form.get('new_customer_name','').strip(); phone=form.get('new_customer_phone','').strip(); id_no=form.get('new_customer_id_no','').strip(); address=form.get('new_customer_address','').strip()
@@ -2505,7 +2517,7 @@ class Handler(BaseHTTPRequestHandler):
                     duplicate=c.execute('SELECT id,full_name,phone,id_no FROM customers WHERE active=1 AND (lower(trim(id_no))=lower(trim(?)) OR replace(replace(replace(phone,' ',''),'-',''),'+','')=replace(replace(replace(?,' ',''),'-',''),'+','')) ORDER BY id LIMIT 1',(id_no,phone)).fetchone()
                     if duplicate:
                         raise ValueError(f'Customer already registered: {duplicate["full_name"]} · Phone {duplicate["phone"]}. Choose EXISTING CUSTOMER and search by ID or phone. No duplicate was created.')
-                    ts=now(); no='CUS-'+dt.datetime.now().strftime('%Y%m%d%H%M%S')+'-'+secrets.token_hex(2).upper(); cur=c.execute('INSERT INTO customers(customer_no,full_name,phone,id_no,address,created_at,updated_at) VALUES(?,?,?,?,?,?,?)',(no,name,phone,id_no,address,ts,ts)); cid=cur.lastrowid; core.db.audit(c,u,'CREATE','CUSTOMER',cid,f'{no} {name}'); c.commit()
+                    ts=now(); no='CUS-'+dt.datetime.now().strftime('%Y%m%d%H%M%S')+'-'+secrets.token_hex(2).upper(); cur=c.execute('INSERT INTO customers(customer_no,full_name,phone,id_no,address,created_at,updated_at,branch_id) VALUES(?,?,?,?,?,?,?,?)',(no,name,phone,id_no,address,ts,ts,branch_id)); cid=cur.lastrowid; core.db.audit(c,u,'CREATE','CUSTOMER',cid,f'{no} {name}'); c.commit()
                 except Exception:
                     c.rollback(); raise
                 finally: c.close()
@@ -2527,10 +2539,10 @@ class Handler(BaseHTTPRequestHandler):
                 product_key=f'product_id_{ln}' if ln else 'product_id'; qty_key=f'qty_{ln}' if ln else 'qty'
                 line_pid=int(form.get(product_key,'0') or 0); line_qty=int(form.get(qty_key,'0') or 0)
                 if line_pid<=0 or line_qty<=0: raise ValueError(f'Choose a product and valid quantity on line {ln or 1}.')
-                c=core.db.c(); prod=c.execute('SELECT * FROM products WHERE id=? AND active=1',(line_pid,)).fetchone(); c.close()
+                c=core.db.c(); prod=c.execute('SELECT p.*,COALESCE(bs.qty,0) branch_qty,COALESCE(bs.sell_price,p.sell_price) branch_sell_price,COALESCE(bs.wholesale_price,p.wholesale_price) branch_wholesale_price FROM products p LEFT JOIN branch_stock bs ON bs.product_id=p.id AND bs.branch_id=? WHERE p.id=? AND p.active=1',(branch_id,line_pid)).fetchone(); c.close()
                 if not prod: raise ValueError(f'Product on line {ln or 1} was not found.')
-                if float(prod['stock_qty'])<line_qty: raise ValueError(f'Insufficient stock for {prod["name"]}. Available: {prod["stock_qty"]}.')
-                unit_price=float(prod['wholesale_price'] or 0) if sale_type=='WHOLESALE' else float(prod['sell_price'])
+                if float(prod['branch_qty'])<line_qty: raise ValueError(f'Insufficient stock for {prod["name"]}. Available: {prod["branch_qty"]}.')
+                unit_price=float(prod['branch_wholesale_price'] or 0) if sale_type=='WHOLESALE' else float(prod['branch_sell_price'])
                 if unit_price<=0: raise ValueError(f'{sale_type.title()} price is not configured for {prod["name"]}.')
                 cart.append({'product_id':line_pid,'qty':line_qty}); total_expected+=unit_price*line_qty
                 if not pid: pid=line_pid; qty=line_qty
@@ -2549,7 +2561,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not due: raise ValueError('Credit due date is required.')
                 if not coll: raise ValueError('Collateral held for exchange is required.')
                 dt.date.fromisoformat(due)
-                d=core.create_sale(u,{'cart':cart,'payments':[],'customer':customer,'credit':{'due_date':due,'collateral':coll,'collateral_value':cv},'sale_type':sale_type})
+                d=core.create_sale(u,{'cart':cart,'payments':[],'customer':customer,'credit':{'due_date':due,'collateral':coll,'collateral_value':cv},'sale_type':sale_type,'branch_id':branch_id})
             elif customer_mode=='WALK_IN':
                 payment_count=int(form.get('payment_count','1') or 1)
                 max_payments=max(1,min(5,int(float(core.get_setting('max_payment_transactions','5')))))
