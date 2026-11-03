@@ -2396,10 +2396,10 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/sales': return self.sales_post(u,form)
             if path=='/purchases':
                 require_perm_user(u,'CREATE_PURCHASE')
-                try: no,total=save_purchase(u,form); add_flash(session_token(self),f'Purchase {no} saved successfully. Stock updated by {form.get("qty")} unit(s).','success'); return redirect(self,'/purchases')
+                try: no,total=save_purchase(u,form); add_flash(session_token(self),f'Purchase {no} saved successfully. Stock updated in the selected branch.','success'); return redirect(self,'/purchases?branch_id='+str(form.get('branch_id') or u.get('branch_id') or ''))
                 except Exception as e: return send_html(self,purchase_page(u,str(e)),400)
             if path=='/expenses':
-                try: save_expense(u,form); add_flash(session_token(self),'Expense saved successfully.','success'); return redirect(self,'/expenses')
+                try: save_expense(u,form); add_flash(session_token(self),'Expense saved successfully.','success'); return redirect(self,'/expenses?branch_id='+str(form.get('branch_id') or u.get('branch_id') or ''))
                 except Exception as e: return send_html(self,expense_page(u,str(e)),400)
             if path=='/stock-transfers':
                 try:
@@ -2407,8 +2407,8 @@ class Handler(BaseHTTPRequestHandler):
                     if action=='count':
                         result=stock_count_adjustment(u,form); add_flash(session_token(self),f'Stock count saved for {result["product"]}. System {result["before"]:g}, physical {result["physical"]:g}, variance {result["variance"]:+g}.','success')
                     else: add_flash(session_token(self),stock_transfer_action(u,form),'success')
-                    return redirect(self,'/stock-transfers')
-                except Exception as e: return send_html(self,stock_transfers_page(u,message=str(e)),400)
+                    return redirect(self,'/stock-transfers?branch_id='+str(form.get('branch_id') or form.get('source_branch_id') or ''))
+                except Exception as e: return send_html(self,stock_transfers_page(u,query={'branch_id':str(form.get('branch_id') or form.get('source_branch_id') or '')},message=str(e)),400)
             if path=='/products':
                 if role_name(u) not in ('ADMIN','SALES') or not allowed(u,'MANAGE_PRODUCTS'): raise PermissionError('Product Registration is disabled for your account. Contact Administrator.')
                 try:
@@ -2431,8 +2431,8 @@ class Handler(BaseHTTPRequestHandler):
                         admin_product_delete(u,form.get('product_id'),True,form.get('reason','')); msg='Product restored successfully.'
                     else:
                         raise ValueError('Unknown product action.')
-                    add_flash(session_token(self),msg,'success'); return redirect(self,'/products')
-                except Exception as e: return send_html(self,products_page(u,str(e)),400)
+                    add_flash(session_token(self),msg,'success'); return redirect(self,'/products?branch_id='+str(form.get('branch_id') or u.get('branch_id') or ''))
+                except Exception as e: return send_html(self,products_page(u,str(e),query={'branch_id':str(form.get('branch_id') or '')}),400)
             if path=='/users':
                 if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
                 try:
@@ -2603,7 +2603,7 @@ class Handler(BaseHTTPRequestHandler):
                 if codes:
                     c=core.db.c(); c.execute("UPDATE mpesa_stk_requests SET sale_id=?,updated_at=? WHERE mpesa_code IN ({}) AND sale_id IS NULL".format(','.join('?' for _ in codes)),tuple([d['sale_id'],core.now_str()]+codes)); c.commit(); c.close()
             add_flash(session_token(self),f'Sale {d["receipt_no"]} saved successfully. Total {money(d["total"])}','success')
-            return redirect(self,'/sales')
+            return redirect(self,'/sales?branch_id='+str(branch_id))
         except Exception as e:
             return send_html(self,sales_page(u,str(e),query={'branch_id':str(branch_id) if 'branch_id' in locals() else ''}),400)
     def credit_payment_post(self,u,form):
