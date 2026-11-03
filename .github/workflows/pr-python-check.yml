@@ -29,9 +29,25 @@ jobs:
           admin_id=c.execute("INSERT INTO users(username,full_name,password_hash,role,access_role,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",("testadmin","Test Admin",core.sha("admin-test-pass"),"ADMIN","ADMIN",1,ts,ts)).lastrowid
           c.commit(); c.close()
           admin={"id":admin_id,"username":"testadmin","full_name":"Test Admin","access_role":"ADMIN","role":"ADMIN","branch_id":None}
-          core.update_settings(admin,{"default_unit":"crate","mpesa_recovery_match_window_minutes":"60","change_reason":"CI settings test"})
+          core.update_settings(admin,{"default_unit":"crate","mpesa_recovery_match_window_minutes":"60","report_default_days":"14","allow_credit_sales":"NO","require_mpesa_code":"NO","subscription_due_day":"10","subscription_first_month":"2027-01","subscription_paybill":"123456","subscription_account":"ABC123","change_reason":"CI settings test"})
           assert core.get_setting("default_unit")=="crate"
           assert core.get_setting("mpesa_recovery_match_window_minutes")=="60"
+          assert core.get_setting("subscription_due_day")=="10"
+          assert core.get_setting("subscription_first_month")=="2027-01"
+          assert core.get_setting("subscription_paybill")=="123456"
+          assert core.get_setting("subscription_account")=="ABC123"
+          try:
+              core.create_sale({"id":admin_id,"username":"testadmin","access_role":"ADMIN","role":"ADMIN"},{"credit":{}})
+              raise AssertionError("Credit sale was accepted while disabled.")
+          except ValueError as e:
+              assert "Credit sales are disabled" in str(e)
+          c=core.db.c()
+          payments=core.validate_payments(c,[{"amount":1,"payment_method":"MPESA","mpesa_code":""}],1)
+          c.close()
+          assert payments[0]["payment_method"]=="MPESA"
+          fd,ft,td,ttime,preset=app.period_from_query({})
+          import datetime as dt
+          assert (dt.date.fromisoformat(td)-dt.date.fromisoformat(fd)).days==13
           try:
               core.update_settings(admin,{"mpesa_recovery_match_window_minutes":"4","change_reason":"CI invalid range test"})
               raise AssertionError("Invalid M-Pesa recovery window was accepted.")
