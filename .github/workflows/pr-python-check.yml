@@ -79,9 +79,8 @@ jobs:
           assert core.effective_permissions(manager)["MANAGE_PRODUCTS"] is True
           app.CURRENT_HANDLER=type("FakeHandler",(),{"headers":{}})()
           product_page=app.products_page(manager,query={"branch_id":str(bid),"search":"CI Backup"})
-          assert "SAVE PRODUCT" in product_page and "CI Backup Product" in product_page
+          assert "SAVE PRODUCT" in product_page and "Search all registered products" in product_page
           assert "SKU" not in product_page
-          assert "CI Backup Product" not in app.products_page(manager,query={"branch_id":str(bid),"search":"no-such-product"})
           assert "Search all products" in app.sales_page(sales,query={"branch_id":str(bid)})
           assert "SKU" not in app.sales_page(sales,query={"branch_id":str(bid)})
           assert "Search all products" in app.purchase_page(sales,query={"branch_id":str(bid)})
@@ -115,6 +114,8 @@ jobs:
           c=core.db.c()
           c.execute("INSERT INTO products(sku,name,category,unit,sell_price,wholesale_price,avg_cost,stock_qty,reorder_level,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",("CI-SKU-001","CI Backup Product","Test","bottle",100,90,60,5,2,1,core.now_str(),core.now_str()))
           c.commit(); c.close()
+          assert "CI Backup Product" in app.products_page(manager,query={"branch_id":str(bid),"search":"CI Backup"})
+          assert "CI Backup Product" not in app.products_page(manager,query={"branch_id":str(bid),"search":"no-such-product"})
           # A backup download must be a readable, integrity-checked SQLite snapshot with a manifest.
           import io, sqlite3, json
           fake=object.__new__(app.Handler)
