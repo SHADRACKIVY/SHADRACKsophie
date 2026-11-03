@@ -743,6 +743,10 @@ def admin_edit_user(u, form):
     try:
         c.execute('BEGIN'); target=c.execute('SELECT * FROM users WHERE id=?',(uid,)).fetchone()
         if not target: raise ValueError('User not found.')
+        # A Sales Person's first branch assignment is permanent. Only a new, unassigned
+        # Sales account can receive its initial branch; Management/Admin switch views instead.
+        if target['access_role']=='SALES' and target['branch_id'] is not None and access_role=='SALES' and int(target['branch_id'])!=branch_id:
+            raise PermissionError('This Sales Person is permanently assigned to their original branch. A Sales Person cannot be transferred to another branch.')
         if branch_id and not c.execute('SELECT 1 FROM branches WHERE id=? AND active=1',(branch_id,)).fetchone(): raise ValueError('Select an active branch.')
         if uid==u['id'] and (active==0 or access_role!='ADMIN'): raise ValueError('You cannot remove or restrict your own Administrator access.')
         if target['access_role']=='ADMIN' and (active==0 or access_role!='ADMIN'):
@@ -1396,7 +1400,10 @@ def reorder_report_page(u, query=None):
 
 def stock_transfers_page(u, query=None, message=''):
     require_perm_user(u,'VIEW_STOCK')
-    role=role_name(u); branch_id=branch_scope_for(u,query)
+    role=role_name(u)
+    if role not in ('ADMIN','MANAGEMENT'):
+        raise PermissionError('Stock transfers and cross-branch stock counts are restricted to Management and Administrator. Sales Persons can work only with stock in their assigned branch.')
+    branch_id=branch_scope_for(u,query)
     c=core.db.c()
     branches=[dict(r) for r in c.execute('SELECT id,name FROM branches WHERE active=1 ORDER BY name').fetchall()]
     products=[dict(r) for r in c.execute('SELECT id,name,sku FROM products WHERE active=1 ORDER BY name').fetchall()]
@@ -2662,6 +2669,8 @@ class Handler(BaseHTTPRequestHandler):
                 try: save_expense(u,form); add_flash(session_token(self),'Expense saved successfully.','success'); return redirect(self,'/expenses?branch_id='+str(form.get('branch_id') or u.get('branch_id') or ''))
                 except Exception as e: return send_html(self,expense_page(u,str(e)),400)
             if path=='/stock-transfers':
+                if role_name(u) not in ('ADMIN','MANAGEMENT'):
+                    raise PermissionError('Stock transfers and cross-branch stock counts are restricted to Management and Administrator.')
                 try:
                     action=form.get('action','request')
                     if action=='count':
