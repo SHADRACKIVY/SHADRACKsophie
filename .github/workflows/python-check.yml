@@ -22,7 +22,7 @@ jobs:
           import os, shutil
           shutil.rmtree(os.environ['KAKA_DATA_DIR'], ignore_errors=True)
           import kaka_core as core
-          from kaka_liquor_app import save_purchase, stock_transfer_action, stock_count_adjustment
+          from kaka_liquor_app import save_purchase, stock_transfer_action, stock_count_adjustment, branch_scope_for
           c = core.db.c()
           ts = core.now_str()
           b1 = c.execute("INSERT INTO branches(name,code,created_at,updated_at) VALUES(?,?,?,?)", ("Test Branch A","TSTA",ts,ts)).lastrowid
@@ -33,10 +33,11 @@ jobs:
           uid = c.execute("INSERT INTO users(username,full_name,password_hash,role,access_role,active,created_at,updated_at,branch_id) VALUES(?,?,?,?,?,?,?,?,?)", ("branchb","Branch B Tester",core.sha("test-password"),"SALES","SALES",1,ts,ts,b2)).lastrowid
           c.commit()
           user = {"id":uid,"branch_id":b2,"username":"branchb","full_name":"Branch B Tester","access_role":"SALES","role":"SALES"}
+          assert branch_scope_for(user, {"branch_id":[str(b1)]}) == b2, "Branch staff must not switch branches by query parameter."
           for bid, qty in ((b1,100),(b2,80)):
               c.execute("INSERT INTO stock_movements(movement_time,user_id,product_id,movement_type,qty,before_qty,after_qty,unit_cost,reference,branch_id) VALUES(?,?,?,?,?,?,?,?,?,?)", (ts,uid,p,"OPENING_STOCK",qty,0,qty,5,"TEST OPENING",bid))
           c.commit()
-          core.create_sale(user, {"cart":[{"product_id":p,"qty":10}],"payments":[{"amount":100,"payment_method":"CASH","mpesa_code":""}],"customer":{},"sale_type":"RETAIL"})
+          core.create_sale(user, {"cart":[{"product_id":p,"qty":10}],"payments":[{"amount":100,"payment_method":"CASH","mpesa_code":""}],"customer":{},"sale_type":"RETAIL","branch_id":b1})
           c = core.db.c()
           q1 = c.execute("SELECT qty FROM branch_stock WHERE branch_id=? AND product_id=?",(b1,p)).fetchone()["qty"]
           q2 = c.execute("SELECT qty FROM branch_stock WHERE branch_id=? AND product_id=?",(b2,p)).fetchone()["qty"]
