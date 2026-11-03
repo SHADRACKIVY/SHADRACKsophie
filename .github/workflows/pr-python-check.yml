@@ -118,5 +118,18 @@ jobs:
           c=core.db.c(); assert c.execute("SELECT status FROM mpesa_stk_requests WHERE checkout_request_id='ci-review-checkout'").fetchone()["status"]=="REVIEW"; c.close()
           app.mpesa_receive_stk(stk_callback("ci-success-checkout",100,"CISUCC001"))
           c=core.db.c(); assert c.execute("SELECT status FROM mpesa_stk_requests WHERE checkout_request_id='ci-success-checkout'").fetchone()["status"]=="SUCCESS"; c.close()
-          print("PASS: Settings, permissions, consistent backup download, mobile navigation, and M-Pesa callback reconciliation.")
+          # Professional report export smoke tests: styled/numeric/filterable XLSX and multipage PDF.
+          import zipfile, xml.etree.ElementTree as ET, re
+          xlsx=core.xlsx_bytes("CI PROFIT AND LOSS",["Item","Amount (KES)","% of Revenue"],[["Sales Revenue",1000.0,100.0],["NET PROFIT / (LOSS)",250.0,25.0]])
+          with zipfile.ZipFile(io.BytesIO(xlsx)) as book:
+              assert "xl/styles.xml" in book.namelist()
+              root=ET.fromstring(book.read("xl/worksheets/sheet1.xml"))
+              ns={"x":"http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+              assert root.find("x:autoFilter",ns) is not None
+              assert root.find("x:sheetViews/x:sheetView/x:pane",ns) is not None
+              assert len(root.findall(".//x:v",ns)) >= 4
+          pdf=app.make_pdf("CI STOCK REPORT",["Product","Opening","Purchased","Sold","Closing"],[[f"Test Product {i}",10,2,1,11] for i in range(100)])
+          assert pdf.startswith(b"%PDF-1.4")
+          assert len(re.findall(rb"/Type /Page\\b",pdf)) >= 2
+          print("PASS: Settings, permissions, backup integrity, M-Pesa reconciliation, professional Excel exports and multipage PDF reports.")
           PY
