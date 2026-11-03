@@ -785,23 +785,109 @@ def monthly_ranges(reference=None):
     return base.strftime('%Y-%m')
 
 def xlsx_bytes(title, headers, rows):
+    """Build a formatted, filterable, numeric Excel workbook using the Python standard library."""
     st=get_settings()
-    identity=[st.get('business_name',APP_NAME), st.get('business_branch_name',''), st.get('business_phone',''), st.get('business_address',''), st.get('business_website',''), ('KRA PIN: '+st.get('business_tax_pin','')) if st.get('business_tax_pin','') else '', title]
-    identity=[x for x in identity if str(x).strip()]
-    def cell(v):
-        s=esc(v); return f'<c t="inlineStr"><is><t>{s}</t></is></c>'
-    xml_rows=[f'<row>'+cell(v)+'</row>' for v in identity]
-    xml_rows.append('<row>'+''.join(cell(h) for h in headers)+'</row>')
-    for r in rows: xml_rows.append('<row>'+''.join(cell(v) for v in r)+'</row>')
-    if st.get('report_footer','').strip(): xml_rows.append('<row>'+cell(st['report_footer'].strip())+'</row>')
-    sheet='<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'+''.join(xml_rows)+'</sheetData></worksheet>'
-    wb='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Report" sheetId="1" r:id="rId1"/></sheets></workbook>'
-    ct='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>'
+    rows=[list(r) for r in rows]
+    headers=list(headers)
+    col_count=max(1,len(headers))
+    def xlcol(n):
+        out=''
+        while n:
+            n,rem=divmod(n-1,26); out=chr(65+rem)+out
+        return out
+    def xml(v):
+        return html.escape(str(v if v is not None else ''),quote=True)
+    def cell(ref,value,style=0):
+        if value is None or value=='':
+            return f'<c r="{ref}" s="{style}"/>'
+        if isinstance(value,bool):
+            return f'<c r="{ref}" s="{style}" t="b"><v>{1 if value else 0}</v></c>'
+        if isinstance(value,(int,float,Decimal)):
+            try:
+                n=float(value)
+                if not (n==n and abs(n)!=float('inf')): raise ValueError()
+                return f'<c r="{ref}" s="{style}"><v>{format(n,".12g")}</v></c>'
+            except Exception:
+                pass
+        return f'<c r="{ref}" s="{style}" t="inlineStr"><is><t xml:space="preserve">{xml(value)}</t></is></c>'
+    identity=[st.get('business_name',APP_NAME),st.get('business_branch_name',''),st.get('business_phone',''),st.get('business_address',''),st.get('business_website',''),('KRA PIN: '+st.get('business_tax_pin','')) if st.get('business_tax_pin','') else '',title]
+    identity=[v for v in identity if str(v).strip()]
+    all_rows=[]
+    for idx,value in enumerate(identity):
+        all_rows.append(([value],1 if idx==0 else 2,28 if idx==0 else 20))
+    header_row=len(all_rows)+1
+    all_rows.append((headers,3,30))
+    for row in rows:
+        label=str(row[0] if row else '').upper()
+        summary=any(k in label for k in ('NET PROFIT','GROSS PROFIT','TOTAL','CLOSING BALANCE','OPENING BALANCE'))
+        all_rows.append((row,7 if summary else 0,22 if summary else 20))
+    if st.get('report_footer','').strip():
+        all_rows.append(([st['report_footer'].strip()],2,24))
+    sheet_rows=[]
+    for rno,(values,row_style,height) in enumerate(all_rows,1):
+        cells=[]
+        for cno in range(1,col_count+1):
+            value=values[cno-1] if cno<=len(values) else ''
+            style=row_style
+            if row_style in (0,7) and isinstance(value,(int,float,Decimal)) and cno<=len(headers):
+                h=str(headers[cno-1]).lower()
+                if '%' in h or 'percentage' in h or 'share' in h: style=5
+                elif any(k in h for k in ('amount','revenue','price','cost','value','total','debit','credit','balance','profit','expense','sales')) and not any(k in h for k in ('count','units','qty','quantity','number','transactions')): style=4
+                else: style=6
+                if row_style==7: style=7
+            cells.append(cell(f'{xlcol(cno)}{rno}',value,style))
+        sheet_rows.append(f'<row r="{rno}" ht="{height}" customHeight="1">{"".join(cells)}</row>')
+    last_row=max(1,len(all_rows)); last_col=xlcol(col_count)
+    widths=[]
+    for i in range(col_count):
+        samples=[str(headers[i] if i<len(headers) else '')]+[str(row[i]) for row in rows[:250] if i<len(row) and row[i] is not None]
+        width=max(11,min(34,max((len(x) for x in samples),default=12)+2))
+        if any(k in str(headers[i]).lower() for k in ('description','customer','product','supplier','branch','attended','reference','calculation','note')): width=max(width,22)
+        widths.append(f'<col min="{i+1}" max="{i+1}" width="{width}" customWidth="1"/>')
+    merges=''.join(f'<mergeCell ref="A{i}:{last_col}{i}"/>' for i in range(1,header_row) if col_count>1)
+    merge_xml=f'<mergeCells count="{header_row-1}">{merges}</mergeCells>' if merges else ''
+    auto_filter=f'<autoFilter ref="A{header_row}:{last_col}{last_row}"/>' if last_row>header_row else ''
+    sheet=f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <dimension ref="A1:{last_col}{last_row}"/>
+      <sheetViews><sheetView workbookViewId="0"><pane ySplit="{header_row}" topLeftCell="A{header_row+1}" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
+      <sheetFormatPr defaultRowHeight="20"/><cols>{"".join(widths)}</cols>
+      <sheetData>{"".join(sheet_rows)}</sheetData>{merge_xml}{auto_filter}
+      <pageMargins left="0.25" right="0.25" top="0.5" bottom="0.5" header="0.2" footer="0.2"/>
+      <pageSetup orientation="landscape" fitToWidth="1" fitToHeight="0" paperSize="9"/>
+      <headerFooter><oddFooter>&amp;L MONTEZ LIQUOR&amp;C Confidential&amp;RPage &amp;P of &amp;N</oddFooter></headerFooter>
+    </worksheet>'''
+    workbook='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Business Report" sheetId="1" r:id="rId1"/></sheets><calcPr calcMode="auto"/></workbook>'
+    content_types='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>'
     rels='<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'
-    wrels='<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>'
+    wrels='<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'
+    styles='''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <numFmts count="2"><numFmt numFmtId="164" formatCode='"KES" #,##0.00;[Red]("KES" #,##0.00)'/><numFmt numFmtId="165" formatCode='0.00"%"'/></numFmts>
+      <fonts count="4"><font><sz val="10"/><name val="Aptos"/></font><font><b/><sz val="16"/><color rgb="FFFFFFFF"/><name val="Aptos Display"/></font><font><sz val="9"/><color rgb="FF52645A"/><name val="Aptos"/></font><font><b/><sz val="10"/><color rgb="FFFFFFFF"/><name val="Aptos"/></font></fonts>
+      <fills count="5"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF164F40"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFEAF1EC"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFF2D6"/><bgColor indexed="64"/></patternFill></fill></fills>
+      <borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color rgb="FFDCE5DE"/></left><right style="thin"><color rgb="FFDCE5DE"/></right><top style="thin"><color rgb="FFDCE5DE"/></top><bottom style="thin"><color rgb="FFDCE5DE"/></bottom><diagonal/></border></borders>
+      <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+      <cellXfs count="8">
+        <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1"/>
+        <xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFill="1" applyFont="1"><alignment vertical="center"/></xf>
+        <xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"><alignment vertical="center"/></xf>
+        <xf numFmtId="0" fontId="3" fillId="2" borderId="1" xfId="0" applyFill="1" applyFont="1" applyBorder="1"><alignment vertical="center" wrapText="1"/></xf>
+        <xf numFmtId="164" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1"><alignment horizontal="right"/></xf>
+        <xf numFmtId="165" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1"><alignment horizontal="right"/></xf>
+        <xf numFmtId="4" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1"><alignment horizontal="right"/></xf>
+        <xf numFmtId="164" fontId="3" fillId="4" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1"><alignment horizontal="right"/></xf>
+      </cellXfs>
+      <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+    </styleSheet>'''
     bio=io.BytesIO()
     with zipfile.ZipFile(bio,'w',zipfile.ZIP_DEFLATED) as z:
-        z.writestr('[Content_Types].xml',ct); z.writestr('_rels/.rels',rels); z.writestr('xl/workbook.xml',wb); z.writestr('xl/_rels/workbook.xml.rels',wrels); z.writestr('xl/worksheets/sheet1.xml',sheet)
+        z.writestr('[Content_Types].xml',content_types)
+        z.writestr('_rels/.rels',rels)
+        z.writestr('xl/workbook.xml',workbook)
+        z.writestr('xl/_rels/workbook.xml.rels',wrels)
+        z.writestr('xl/worksheets/sheet1.xml',sheet)
+        z.writestr('xl/styles.xml',styles)
     return bio.getvalue()
 
 def simple_pdf(title, headers, rows):
