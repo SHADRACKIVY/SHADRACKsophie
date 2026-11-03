@@ -21,7 +21,8 @@ jobs:
           import os, shutil
           shutil.rmtree(os.environ['KAKA_DATA_DIR'], ignore_errors=True)
           import kaka_core as core
-          from kaka_liquor_app import save_user, admin_edit_user, layout, products_page
+          import kaka_liquor_app as app
+          from kaka_liquor_app import save_user, admin_edit_user, layout
           c=core.db.c()
           ts=core.now_str()
           bid=c.execute("INSERT INTO branches(name,code,created_at,updated_at) VALUES(?,?,?,?)",("Role Test Branch","ROLE-01",ts,ts)).lastrowid
@@ -43,7 +44,8 @@ jobs:
           sales={"id":sales_id,"username":"ci_role_sales","full_name":"CI Role Sales","access_role":"SALES","role":"SALES","branch_id":bid}
           assert core.effective_permissions(manager)["VIEW_STOCK"] is True
           assert core.effective_permissions(manager)["MANAGE_PRODUCTS"] is True
-          assert "SAVE PRODUCT" in products_page(manager,query={"branch_id":str(bid)})
+          app.CURRENT_HANDLER=type("FakeHandler",(),{"headers":{}})()
+          assert "SAVE PRODUCT" in app.products_page(manager,query={"branch_id":str(bid)})
           assert core.effective_permissions(manager)["VIEW_REPORTS"] is False
           assert core.effective_permissions(manager)["MANAGE_SETTINGS"] is False
           assert core.effective_permissions(sales)["CREATE_SALE"] is True
