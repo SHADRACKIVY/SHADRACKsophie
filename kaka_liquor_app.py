@@ -2178,7 +2178,7 @@ def _financial_account_events(account, end, branch_id=None):
     events=[]
     try:
         if account=='CASH':
-            sql="SELECT sp.paid_at ts,COALESCE(sp.mpesa_code,'') ref,'Sale '+s.receipt_no description,sp.amount amount,s.branch_id branch_id,'IN' direction FROM sale_payments sp JOIN sales s ON s.id=sp.sale_id WHERE UPPER(sp.payment_method)=?"
+            sql="SELECT sp.paid_at ts,COALESCE(sp.mpesa_code,'') ref,'Sale '||s.receipt_no description,sp.amount amount,s.branch_id branch_id,'IN' direction FROM sale_payments sp JOIN sales s ON s.id=sp.sale_id WHERE UPPER(sp.payment_method)=?"
             args=[method]
             if branch_id is not None: sql+=" AND s.branch_id=?"; args.append(int(branch_id))
             for r in c.execute(sql,args).fetchall(): events.append(dict(r))
@@ -2186,17 +2186,21 @@ def _financial_account_events(account, end, branch_id=None):
             args=[method]
             if branch_id is not None: sql+=" AND s.branch_id=?"; args.append(int(branch_id))
             for r in c.execute(sql,args).fetchall(): events.append(dict(r))
-            sql="SELECT p.purchased_at ts,COALESCE(p.reference,p.purchase_no) ref,'Purchase · '+p.supplier description,p.total amount,p.branch_id branch_id,'OUT' direction FROM purchases p WHERE UPPER(REPLACE(p.payment_method,'-',''))=?"
+            sql="SELECT p.purchased_at ts,COALESCE(p.reference,p.purchase_no) ref,'Purchase · '||p.supplier description,p.total amount,p.branch_id branch_id,'OUT' direction FROM purchases p WHERE UPPER(REPLACE(p.payment_method,'-',''))=?"
             args=[method]
             if branch_id is not None: sql+=" AND p.branch_id=?"; args.append(int(branch_id))
             for r in c.execute(sql,args).fetchall(): events.append(dict(r))
-            sql="SELECT e.expense_date ts,COALESCE(e.reference,e.expense_no) ref,'Expense · '+e.description description,e.amount amount,e.branch_id branch_id,'OUT' direction FROM expenses e WHERE UPPER(REPLACE(e.payment_method,'-',''))=?"
+            sql="SELECT e.expense_date ts,COALESCE(e.reference,e.expense_no) ref,'Expense · '||e.description description,e.amount amount,e.branch_id branch_id,'OUT' direction FROM expenses e WHERE UPPER(REPLACE(e.payment_method,'-',''))=?"
             args=[method]
             if branch_id is not None: sql+=" AND e.branch_id=?"; args.append(int(branch_id))
             for r in c.execute(sql,args).fetchall(): events.append(dict(r))
             sql="SELECT t.created_at ts,t.mpesa_code ref,'Cash deposited to Paybill · '+t.transfer_no description,t.amount amount,t.branch_id branch_id,'OUT' direction FROM financial_transfers t"
             args=[]
             if branch_id is not None: sql+=" WHERE t.branch_id=?"; args.append(int(branch_id))
+            for r in c.execute(sql,args).fetchall(): events.append(dict(r))
+            sql="SELECT me.occurred_at ts,me.reference ref,me.description description,me.amount amount,me.branch_id branch_id,me.direction direction FROM financial_manual_entries me WHERE me.account='CASH'"
+            args=[]
+            if branch_id is not None: sql+=" AND me.branch_id=?"; args.append(int(branch_id))
             for r in c.execute(sql,args).fetchall(): events.append(dict(r))
             if branch_id is None:
                 for r in c.execute("SELECT ob.effective_at ts,'OPENING-CASH-'||ob.branch_key ref,'Opening cash balance' description,ob.amount amount,ob.branch_key branch_id,'IN' direction FROM financial_opening_balances ob WHERE ob.account='CASH'").fetchall():
@@ -2216,11 +2220,15 @@ def _financial_account_events(account, end, branch_id=None):
             for r in c.execute("SELECT t.created_at ts,t.mpesa_code ref,'Cash deposit received · '||t.transfer_no description,t.amount amount,t.branch_id branch_id,'IN' direction FROM financial_transfers t").fetchall():
                 events.append(dict(r))
             # Include Paybill C2B receipts that have not already been posted against a sale or credit payment.
-            for r in c.execute("""SELECT mt.trans_time ts,mt.trans_id ref,'Unmatched Paybill receipt · '||COALESCE(mt.bill_ref_number,'') description,mt.amount amount,NULL branch_id,'IN' direction
+            for r in c.execute("""SELECT COALESCE(NULLIF(mt.trans_time,''),mt.received_at) ts,mt.trans_id ref,'Unmatched Paybill receipt · '||COALESCE(mt.bill_ref_number,'') description,mt.amount amount,NULL branch_id,'IN' direction
                 FROM mpesa_transactions mt
                 WHERE COALESCE(mt.trans_id,'')<>''
                 AND NOT EXISTS(SELECT 1 FROM sale_payments sp WHERE UPPER(COALESCE(sp.mpesa_code,''))=UPPER(mt.trans_id))
                 AND NOT EXISTS(SELECT 1 FROM credit_payments cp WHERE UPPER(COALESCE(cp.mpesa_code,''))=UPPER(mt.trans_id))""").fetchall():
+                events.append(dict(r))
+            for r in c.execute("SELECT sr.transaction_date ts,COALESCE(sr.mpesa_code,'') ref,'Unallocated STK payment' description,sr.amount amount,NULL branch_id,'IN' direction FROM mpesa_stk_requests sr WHERE UPPER(sr.status) IN ('SUCCESS','COMPLETED','SUCCESSFUL') AND COALESCE(sr.mpesa_code,'')<>'' AND NOT EXISTS(SELECT 1 FROM sale_payments sp WHERE UPPER(COALESCE(sp.mpesa_code,''))=UPPER(sr.mpesa_code)) AND NOT EXISTS(SELECT 1 FROM credit_payments cp WHERE UPPER(COALESCE(cp.mpesa_code,''))=UPPER(sr.mpesa_code))").fetchall():
+                events.append(dict(r))
+            for r in c.execute("SELECT me.occurred_at ts,me.reference ref,me.description description,me.amount amount,me.branch_id branch_id,me.direction direction FROM financial_manual_entries me WHERE me.account='PAYBILL'").fetchall():
                 events.append(dict(r))
             for r in c.execute("SELECT ob.effective_at ts,'OPENING-PAYBILL' ref,'Opening Paybill balance' description,ob.amount amount,NULL branch_id,'IN' direction FROM financial_opening_balances ob WHERE ob.account='PAYBILL' AND ob.branch_key=0").fetchall():
                 events.append(dict(r))
@@ -2306,9 +2314,10 @@ def financials_page(u, query=None, message=''):
     <div><label>Effective date & time</label><input type="datetime-local" name="effective_at" value="{dt.datetime.now().strftime('%Y-%m-%dT%H:%M')}" required></div>
     <div style="grid-column:1/-1"><label>Verification note</label><input name="note" maxlength="250" required></div>
     <div class="actions"><button class="btn gold">SAVE INITIAL BALANCE</button></div></form></section>'''
+    manual_form=f'''<section class="card" style="margin-top:14px"><div class="section-head"><h2>Record Other Cash / Paybill Movement</h2><span class="pill">ADMINISTRATOR ONLY</span></div><p class="muted">Use only for a genuine bank/Paybill withdrawal, charge or adjustment not already recorded as a sale, purchase, expense or cash-to-Paybill transfer. Do not duplicate existing transactions.</p><form method="post" action="/financials" class="form-grid">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="manual_entry"><div><label>Account</label><select name="account" id="manual_account" onchange="document.getElementById('manual_branch_wrap').style.display=this.value==='CASH'?'block':'none'"><option value="PAYBILL">M-Pesa Paybill</option><option value="CASH">Cash</option></select></div><div><label>Direction</label><select name="direction"><option value="OUT">Money Out / Withdrawal</option><option value="IN">Money In / Adjustment</option></select></div><div id="manual_branch_wrap" style="display:none"><label>Branch (cash only)</label><select name="branch_id"><option value="">SELECT BRANCH</option>{''.join(f'<option value="{int(b["id"])}">{esc(b["name"])}</option>' for b in branches)}</select></div><div><label>Amount (KSh)</label><input type="number" name="amount" min="0.01" step="0.01" required></div><div><label>Transaction reference</label><input name="reference" maxlength="80" required></div><div><label>Date & time</label><input type="datetime-local" name="occurred_at" value="{dt.datetime.now().strftime('%Y-%m-%dT%H:%M')}" required></div><div style="grid-column:1/-1"><label>Description / reason</label><input name="description" maxlength="250" required></div><div class="actions"><button class="btn gold">RECORD FINANCIAL MOVEMENT</button></div></form></section>'''
     opening_rows=[[esc(r['account']),esc(next((b['name'] for b in branches if int(b['id'])==int(r['branch_key'])),'Company / Paybill') if r['account']=='CASH' else 'Company / Paybill'),money(r['amount']),esc(r['effective_at'])] for r in opening]
     opening_section=f'<section class="card" style="margin-top:14px"><h3>Recorded Initial Balances</h3>{html_table(["Account","Branch","Amount","Effective From"],opening_rows,"No initial balances have been entered.")}</section>'
-    return layout(u,'Cash & Paybill Statements',notice+account_links+statement+transfer_form+opening_form+opening_section,'/financials','Administrator-only cash movement and Paybill reconciliation')
+    return layout(u,'Cash & Paybill Statements',notice+account_links+statement+transfer_form+opening_form+manual_form+opening_section,'/financials','Administrator-only cash movement and Paybill reconciliation')
 
 
 def financials_export(handler,u,query):
@@ -2358,6 +2367,28 @@ def financials_post(handler,u,form):
             c.commit()
             add_flash(session_token(handler),f'Transfer {transfer_no} posted. Cash reduced by {money(amount)} and Paybill increased by the same amount.','success')
             return redirect(handler,'/financials?account=CASH')
+        if action=='manual_entry':
+            account=str(form.get('account','PAYBILL')).upper()
+            direction=str(form.get('direction','OUT')).upper()
+            amount=round(float(form.get('amount','0') or 0),2)
+            reference=str(form.get('reference','')).strip().upper()
+            description=str(form.get('description','')).strip()
+            occurred=str(form.get('occurred_at','')).strip().replace('T',' ')
+            branch_id=int(form.get('branch_id','0') or 0) if account=='CASH' else None
+            if account not in ('CASH','PAYBILL') or direction not in ('IN','OUT') or amount<=0 or not reference or len(description)<5:
+                raise ValueError('Enter a valid account, direction, positive amount, reference and description of at least 5 characters.')
+            try: dt.datetime.strptime(occurred,'%Y-%m-%d %H:%M')
+            except Exception: raise ValueError('Enter a valid transaction date and time.')
+            if account=='CASH':
+                if not c.execute('SELECT 1 FROM branches WHERE id=? AND active=1',(branch_id,)).fetchone(): raise ValueError('Select an active branch for this cash movement.')
+                if direction=='OUT':
+                    available=financial_statement_data('CASH','1900-01-01 00:00:00','2999-12-31 23:59:59',branch_id)['closing']
+                    if amount>available: raise ValueError(f'Insufficient recorded cash. Available: {money(available)}.')
+            c.execute('INSERT INTO financial_manual_entries(account,branch_id,direction,amount,reference,description,occurred_at,created_at,created_by) VALUES(?,?,?,?,?,?,?,?,?)',(account,branch_id,direction,amount,reference,description,occurred+':00',ts,u['id']))
+            core.db.audit(c,u,'RECORD_FINANCIAL_MOVEMENT','FINANCIAL_ENTRY',reference,f'account={account}; direction={direction}; amount={amount:.2f}; branch_id={branch_id}; description={description}; occurred_at={occurred}')
+            c.commit()
+            add_flash(session_token(handler),'Financial movement recorded successfully.','success')
+            return redirect(handler,'/financials?account='+account)
         if action=='opening':
             account=str(form.get('account','CASH')).upper()
             if account not in ('CASH','PAYBILL'): raise ValueError('Select Cash or Paybill.')
