@@ -852,7 +852,7 @@ def xlsx_bytes(title, headers, rows):
       <dimension ref="A1:{last_col}{last_row}"/>
       <sheetViews><sheetView workbookViewId="0"><pane ySplit="{header_row}" topLeftCell="A{header_row+1}" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
       <sheetFormatPr defaultRowHeight="20"/><cols>{"".join(widths)}</cols>
-      <sheetData>{"".join(sheet_rows)}</sheetData>{merge_xml}{auto_filter}
+      <sheetData>{"".join(sheet_rows)}</sheetData>{auto_filter}{merge_xml}
       <pageMargins left="0.25" right="0.25" top="0.5" bottom="0.5" header="0.2" footer="0.2"/>
       <pageSetup orientation="landscape" fitToWidth="1" fitToHeight="0" paperSize="9"/>
       <headerFooter><oddFooter>&amp;L MONTEZ LIQUOR&amp;C Confidential&amp;RPage &amp;P of &amp;N</oddFooter></headerFooter>
