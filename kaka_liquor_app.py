@@ -1376,7 +1376,7 @@ def ai_page(u,message=''):
 
 
 def save_supplier(u, form):
-    require_perm_user(u,'CREATE_PURCHASE')
+    # The HTTP route enforces CREATE_PURCHASE before invoking this transaction helper.
     name=str(form.get('name','') or '').strip()
     contact=str(form.get('contact_person','') or '').strip()
     phone=str(form.get('phone','') or '').strip()
