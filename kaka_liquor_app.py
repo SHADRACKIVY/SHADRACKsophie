@@ -3040,7 +3040,7 @@ def do_POST(self):
             try: save_expense(u,form); add_flash(session_token(self),'Expense saved successfully.','success'); return redirect(self,'/expenses')
             except Exception as e: return send_html(self,expense_page(u,str(e)),400)
         if path=='/products':
-            if role_name(u) not in ('ADMIN','SALES') or not allowed(u,'MANAGE_PRODUCTS'): raise PermissionError('Product Registration is disabled for your account. Contact Administrator.')
+            if role_name(u) not in ('ADMIN','MANAGEMENT','SALES') or not allowed(u,'MANAGE_PRODUCTS'): raise PermissionError('Product Registration is disabled for your account. Contact Administrator.')
             try:
                 action=form.get('action','create')
                 if action=='create': save_product(u,form); msg='Product saved successfully. Product registered successfully.'
