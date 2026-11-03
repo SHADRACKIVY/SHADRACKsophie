@@ -854,27 +854,33 @@ CSS = r'''
 '''
 
 
-def mpesa_live_messages(limit=8):
-    """Return newest M-Pesa payment updates from STK and C2B sources."""
+def mpesa_live_messages(limit=8, branch_id=None):
+    """Return newest M-Pesa updates; branch staff only see STK/C2B payments tied to their branch."""
     c=core.db.c(); items=[]
+    stk_scope=' WHERE branch_id=?' if branch_id is not None else ''
+    stk_args=(int(branch_id),int(limit)) if branch_id is not None else (int(limit),)
     stk=c.execute("""SELECT updated_at AS ts,amount,phone,status,mpesa_code,client_ref
-                       FROM mpesa_stk_requests ORDER BY id DESC LIMIT ?""",(limit,)).fetchall()
+                       FROM mpesa_stk_requests"""+stk_scope+" ORDER BY id DESC LIMIT ?",stk_args).fetchall()
     for r in stk:
         status=str(r['status'] or 'PENDING').upper(); code=r['mpesa_code'] or ''
         title='M-PESA PAYMENT CONFIRMED' if status in ('SUCCESS','SUCCEEDED','COMPLETED') else 'M-PESA PAYMENT UPDATE'
         detail=f"{status} · {r['phone'] or 'Phone unavailable'}"
         if code: detail += f" · Code {code}"
         items.append({'ts':r['ts'] or '','amount':float(r['amount'] or 0),'title':title,'detail':detail,'code':code,'source':'STK'})
-    c2b=c.execute("""SELECT received_at AS ts,amount,msisdn,first_name,last_name,trans_id,status,bill_ref_number
-                       FROM mpesa_transactions ORDER BY id DESC LIMIT ?""",(limit,)).fetchall()
+    if branch_id is None:
+        c2b=c.execute("""SELECT received_at AS ts,amount,msisdn,first_name,last_name,trans_id,status,bill_ref_number
+                           FROM mpesa_transactions ORDER BY id DESC LIMIT ?""",(int(limit),)).fetchall()
+    else:
+        c2b=c.execute("""SELECT mt.received_at AS ts,mt.amount,mt.msisdn,mt.first_name,mt.last_name,mt.trans_id,mt.status,mt.bill_ref_number
+                           FROM mpesa_transactions mt JOIN sale_payments sp ON sp.id=mt.matched_sale_payment_id JOIN sales s ON s.id=sp.sale_id
+                           WHERE s.branch_id=? ORDER BY mt.id DESC LIMIT ?""",(int(branch_id),int(limit))).fetchall()
     for r in c2b:
         customer=' '.join(x for x in [(r['first_name'] or '').strip(),(r['last_name'] or '').strip()] if x) or 'Customer'
         status=str(r['status'] or 'RECEIVED').upper(); detail=f"{customer} · {r['msisdn'] or 'Phone unavailable'} · {status}"
         if r['trans_id']: detail += f" · Code {r['trans_id']}"
         if r['bill_ref_number']: detail += f" · Ref {r['bill_ref_number']}"
         items.append({'ts':r['ts'] or '','amount':float(r['amount'] or 0),'title':'M-PESA PAYMENT RECEIVED','detail':detail,'code':r['trans_id'] or '','source':'C2B'})
-    c.close(); items.sort(key=lambda x:x.get('ts',''),reverse=True); return items[:limit]
-
+    c.close(); items.sort(key=lambda x:x.get('ts',''),reverse=True); return items[:int(limit)]
 
 def mpesa_live_messages_html(items):
     if not items: return '<div class="mpesa-live-empty">Waiting for M-Pesa payment messages…</div>'
@@ -885,8 +891,9 @@ def mpesa_live_messages_html(items):
     return ''.join(out)
 
 
-def mpesa_live_messages_json():
-    return {'timestamp':now(),'messages':mpesa_live_messages(8),'refresh_seconds':max(2,int(float(core.get_setting('live_refresh_seconds','5'))))}
+def mpesa_live_messages_json(u=None, query=None):
+    bid=branch_scope_for(u,query) if u else None
+    return {'timestamp':now(),'messages':mpesa_live_messages(8,bid),'refresh_seconds':max(2,int(float(core.get_setting('live_refresh_seconds','5'))))}
 
 def branch_scope_for(u, query=None):
     """Resolve branch access from the authenticated role, never from an untrusted branch parameter for branch staff."""
@@ -963,7 +970,7 @@ def home_page(u, query=None):
     if branch_id is not None:
         c=core.db.c(); br=c.execute('SELECT name FROM branches WHERE id=?',(branch_id,)).fetchone(); c.close(); branch_name=br['name'] if br else 'Selected Branch'
     elif role_name(u) in ('ADMIN','MANAGEMENT'): branch_name='All Branches — Company Total'
-    d=core.dashboard(branch_id); live=core.live_monitoring(branch_id); live['active_users']=active_user_count(); chart=daily_chart(branch_id); mp_live=mpesa_live_messages(8)
+    d=core.dashboard(branch_id); live=core.live_monitoring(branch_id); live['active_users']=active_user_count(); chart=daily_chart(branch_id); mp_live=mpesa_live_messages(8,branch_id)
     tstart=f"{now()[:10]} 00:00:00"; tend=f"{now()[:10]} 23:59:59"; pt=core.business_performance(tstart,tend,branch_id)
     mstart=f"{now()[:7]}-01 00:00:00"; mend=f"{now()[:10]} 23:59:59"; pm=core.business_performance(mstart,mend,branch_id)
     def perf_card(p,label):
@@ -1420,7 +1427,7 @@ def stock_transfers_page(u, query=None, message=''):
 
 
 def live_page(u, query=None):
-    require_perm_user(u,'LIVE_MONITORING'); branch_id=branch_scope_for(u,query); d=core.live_monitoring(branch_id); d['active_users']=active_user_count(); mp_live=mpesa_live_messages(12); selector=branch_scope_selector(u,query,'/live')
+    require_perm_user(u,'LIVE_MONITORING'); branch_id=branch_scope_for(u,query); d=core.live_monitoring(branch_id); d['active_users']=active_user_count(); mp_live=mpesa_live_messages(12,branch_id); selector=branch_scope_selector(u,query,'/live')
     content=f'''{selector}<section class="card"><div class="section-head"><h2>Live Monitoring</h2><span class="pill">AUTO REFRESH</span></div><div class="grid four"><div class="card metric"><div class="muted">ACTIVE USERS</div><div class="v">{d['active_users']}</div></div><div class="card metric"><div class="muted">TODAY SALES</div><div class="v">{money(d['today_sales'])}</div></div><div class="card metric"><div class="muted">PURCHASES</div><div class="v">{money(d['today_purchases'])}</div></div><div class="card metric"><div class="muted">EXPENSES</div><div class="v">{money(d['today_expenses'])}</div></div><div class="card metric"><div class="muted">M-PESA</div><div class="v">{money(d['mpesa'])}</div></div></div></section><section class="card mpesa-live-card" style="margin-top:14px"><div class="mpesa-live-head"><div><h3 style="margin:0">Live M-Pesa Messages</h3><div class="muted">Incoming Till 1546252 payments and STK updates · refreshed automatically</div></div><span class="pill">LIVE</span></div><div id="mpesa-live-messages">{mpesa_live_messages_html(mp_live)}</div></section><div class="grid two" style="margin-top:14px"><section class="card"><div class="section-head"><h3>Recent Sales</h3><a class="btn" href="/live">REFRESH</a></div>{html_table(['Time','Receipt','Customer','Total','By'],[[esc(r['sold_at']),esc(r['receipt_no']),esc(r['customer']),money(r['total']),esc(r['user_name'])] for r in d['recent_sales']])}</section><section class="card"><h3>Recent Purchases</h3>{html_table(['Time','Purchase','Supplier','Total','By'],[[esc(r['purchased_at']),esc(r['purchase_no']),esc(r['supplier']),money(r['total']),esc(r['user_name'])] for r in d['recent_purchases']])}</section></div>'''; return layout(u,'Live Monitoring',content,'/live')
 
 
@@ -2325,7 +2332,7 @@ class Handler(BaseHTTPRequestHandler):
             billing=subscription_billing_state()
             if billing.get('suspended') and role_name(u)!='ADMIN': return send_html(self,subscription_block_page(billing),402)
             if path=='/api/mpesa/stk-status': return send_json(self,mpesa_stk_status(_qsval(qs,'checkout_request_id')))
-            if path=='/api/mpesa/live-messages': return send_json(self,mpesa_live_messages_json())
+            if path=='/api/mpesa/live-messages': return send_json(self,mpesa_live_messages_json(u,qs))
             if path=='/mpesa/monitor': return send_html(self,mpesa_monitor_page(u))
             if path=='/mpesa/recovery': return send_html(self,mpesa_recovery_page(u))
             if path in ('/','/sales-dashboard') and core.get_setting('dashboard_enabled','YES')!='YES': raise PermissionError('Dashboard access is disabled by the Administrator.')
