@@ -565,7 +565,7 @@ def dashboard():
     p=c.execute('SELECT COALESCE(SUM(amount),0) v FROM expenses WHERE substr(expense_date,1,10)=?',(today,)).fetchone()
     mp=c.execute('SELECT COALESCE(SUM(sp.amount),0) v FROM sale_payments sp JOIN sales s ON s.id=sp.sale_id WHERE substr(s.sold_at,1,10)=? AND sp.payment_method="MPESA"',(today,)).fetchone()
     cash=c.execute('SELECT COALESCE(SUM(sp.amount),0) v FROM sale_payments sp JOIN sales s ON s.id=sp.sale_id WHERE substr(s.sold_at,1,10)=? AND sp.payment_method="CASH"',(today,)).fetchone()
-    stock=c.execute('SELECT COALESCE(SUM(stock_qty*avg_cost),0) v, COALESCE(SUM(stock_qty*sell_price),0) retail_v, COALESCE(SUM(stock_qty),0) units, SUM(CASE WHEN stock_qty<=reorder_level THEN 1 ELSE 0 END) low FROM products WHERE active=1').fetchone(); c.close()
+    stock=c.execute('SELECT COALESCE(SUM(bs.qty*bs.avg_cost),0) v, COALESCE(SUM(bs.qty*bs.sell_price),0) retail_v, COALESCE(SUM(bs.qty),0) units, SUM(CASE WHEN bs.qty<=bs.reorder_level THEN 1 ELSE 0 END) low FROM branch_stock bs JOIN products p ON p.id=bs.product_id WHERE p.active=1').fetchone(); c.close()
     return {'today_sales':s['v'],'transactions':s['n'],'expenses':p['v'],'mpesa':mp['v'],'cash':cash['v'],'stock_value':stock['v'],'stock_retail_value':stock['retail_v'],'stock_units':stock['units'],'low_stock':stock['low'] or 0}
 
 def live_monitoring():
@@ -615,7 +615,7 @@ def stock_report(start,end,branch_id=None):
         # Calculate opening and closing from this branch's movement ledger; historical shared stock is never reused.
         movement_filter=' AND branch_id=?' if branch_id is not None else ''
         movement_args=(p['id'],start,int(branch_id)) if branch_id is not None else (p['id'],start)
-        opening_net=c.execute("SELECT COALESCE(SUM(CASE WHEN movement_type='SALE' THEN -qty ELSE qty END),0) q FROM stock_movements WHERE product_id=? AND movement_time<?"+movement_filter,movement_args).fetchone()['q']
+        opening_net=c.execute("SELECT COALESCE(SUM(CASE WHEN movement_type='SALE' THEN -qty ELSE qty END),0) q FROM stock_movements WHERE product_id=? AND (movement_time<? OR movement_type='OPENING_STOCK')"+movement_filter,movement_args).fetchone()['q']
         adj_clause=' AND branch_id=?' if branch_id is not None else ''
         adj_args=(p['id'],start,end,int(branch_id)) if branch_id is not None else (p['id'],start,end)
         adjustments=c.execute("SELECT COALESCE(SUM(CASE WHEN movement_type IN ('SALE','PURCHASE','OPENING_STOCK') THEN 0 ELSE qty END),0) q FROM stock_movements WHERE product_id=? AND movement_time BETWEEN ? AND ?"+adj_clause,adj_args).fetchone()['q']
