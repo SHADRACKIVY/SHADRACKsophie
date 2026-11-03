@@ -304,7 +304,7 @@ def layout(u, title, content, active='', subtitle='Business control center'):
         c=core.db.c(); br=c.execute('SELECT name FROM branches WHERE id=? AND active=1',(int(u['branch_id']),)).fetchone(); c.close(); branch=br['name'] if br else ''
     nav=([(setting_label('nav_dashboard','Dashboard'),'/')] if dashboard_enabled and allowed(u,'VIEW_DASHBOARD') else [])+[(setting_label('nav_sales','Sales / POS'),'/sales')]+([(setting_label('nav_sales_dashboard','Sales Dashboard'),'/sales-dashboard')] if dashboard_enabled and allowed(u,'VIEW_DASHBOARD') else [])+[(setting_label('nav_purchases','Purchases'),'/purchases'),(setting_label('nav_expenses','Expenses'),'/expenses'),(setting_label('nav_customers','Customers / Credit'),'/customers'),(setting_label('nav_reports','Reports'),'/reports'),(setting_label('nav_stock_report','Stock Report'),'/stock-report'),('Stock Transfers / Stock Count','/stock-transfers'),(setting_label('nav_reorder_report','Reorder Report'),'/reorder-report'),(setting_label('nav_live','Live Monitoring'),'/live'),(setting_label('nav_products','Product Registration'),'/products'),('MONTEZ LIQUOR AI Assistant','/ai')]
     if role=='ADMIN':
-        nav += [('Branch Registration','/branches'),('Branch Performance','/branch-performance'),(setting_label('nav_users','User Management'),'/users'),(setting_label('nav_settings','Settings'),'/settings'),('M-Pesa Monitor','/mpesa/monitor'),('Payment Recovery','/mpesa/recovery'),(setting_label('nav_ledger','Ledger & P&L'),'/ledger'),(setting_label('nav_profit_loss','Profit & Loss'),'/profit-loss'),(setting_label('nav_expense_report','Expense Report'),'/expense-report'),(setting_label('nav_backup','Backup'),'/backup'),(setting_label('nav_audit','Audit Log'),'/audit')]
+        nav += [('Branch Registration','/branches'),('Branch Performance','/branch-performance'),('Cash & Paybill Statements','/financials'),(setting_label('nav_users','User Management'),'/users'),(setting_label('nav_settings','Settings'),'/settings'),('M-Pesa Monitor','/mpesa/monitor'),('Payment Recovery','/mpesa/recovery'),(setting_label('nav_ledger','Ledger & P&L'),'/ledger'),(setting_label('nav_profit_loss','Profit & Loss'),'/profit-loss'),(setting_label('nav_expense_report','Expense Report'),'/expense-report'),(setting_label('nav_backup','Backup'),'/backup'),(setting_label('nav_audit','Audit Log'),'/audit')]
     else:
         perm_map={'/':'VIEW_DASHBOARD','/sales':'CREATE_SALE','/sales-dashboard':'VIEW_DASHBOARD','/purchases':'CREATE_PURCHASE','/expenses':'RECORD_EXPENSE','/customers':'MANAGE_CUSTOMERS','/reports':'VIEW_REPORTS','/stock-report':'VIEW_STOCK','/reorder-report':'VIEW_STOCK','/live':'LIVE_MONITORING','/products':'MANAGE_PRODUCTS','/ai':'AI_ASSISTANT'}
         if role=='MANAGEMENT':
@@ -2168,6 +2168,220 @@ def mpesa_monitor_page(u):
     c=core.db.c(); a=c.execute('SELECT created_at,checkout_request_id,amount,phone,status,mpesa_code,updated_at FROM mpesa_stk_requests ORDER BY id DESC LIMIT 100').fetchall(); b=c.execute('SELECT received_at,trans_id,trans_time,amount,msisdn,first_name,last_name,bill_ref_number,status FROM mpesa_transactions ORDER BY id DESC LIMIT 100').fetchall(); c.close()
     return layout(u,'M-Pesa Monitor',f'<section class="card"><h2>Automatic M-Pesa Monitor</h2><p class="muted">STK payments are matched by Checkout Request ID. C2B payments are captured automatically with their M-Pesa receipt code.</p></section><section class="card" style="margin-top:14px"><h3>STK Push Requests</h3>{html_table(["Created","Checkout","Amount","Phone","Status","M-Pesa Code","Updated"],[[esc(r["created_at"]),esc(r["checkout_request_id"]),money(r["amount"]),esc(r["phone"]),esc(r["status"]),esc(r["mpesa_code"] or ""),esc(r["updated_at"])] for r in a],"No STK requests yet.")}</section><section class="card" style="margin-top:14px"><h3>C2B Incoming Payments</h3>{html_table(["Received","M-Pesa Code","Transaction Time","Amount","Phone","Customer","Reference","Status"],[[esc(r["received_at"]),esc(r["trans_id"]),esc(r["trans_time"]),money(r["amount"]),esc(r["msisdn"]),esc((r["first_name"] or "")+" "+(r["last_name"] or "")),esc(r["bill_ref_number"] or ""),esc(r["status"])] for r in b],"No C2B payments received yet.")}</section>','/mpesa/monitor')
 
+
+def _financial_account_events(account, end, branch_id=None):
+    """Build a deduplicated cash or Paybill movement stream from recorded business transactions."""
+    account=account.upper()
+    if account not in ('CASH','PAYBILL'): raise ValueError('Unknown financial account.')
+    method='CASH' if account=='CASH' else 'MPESA'
+    c=core.db.c()
+    events=[]
+    try:
+        if account=='CASH':
+            sql="SELECT sp.paid_at ts,COALESCE(sp.mpesa_code,'') ref,'Sale '+s.receipt_no description,sp.amount amount,s.branch_id branch_id,'IN' direction FROM sale_payments sp JOIN sales s ON s.id=sp.sale_id WHERE UPPER(sp.payment_method)=?"
+            args=[method]
+            if branch_id is not None: sql+=" AND s.branch_id=?"; args.append(int(branch_id))
+            for r in c.execute(sql,args).fetchall(): events.append(dict(r))
+            sql="SELECT cp.payment_date ts,COALESCE(cp.reference,cp.mpesa_code,'') ref,'Credit repayment' description,cp.amount amount,s.branch_id branch_id,'IN' direction FROM credit_payments cp JOIN credit_accounts ca ON ca.id=cp.credit_id JOIN sales s ON s.id=ca.sale_id WHERE UPPER(cp.payment_method)=?"
+            args=[method]
+            if branch_id is not None: sql+=" AND s.branch_id=?"; args.append(int(branch_id))
+            for r in c.execute(sql,args).fetchall(): events.append(dict(r))
+            sql="SELECT p.purchased_at ts,COALESCE(p.reference,p.purchase_no) ref,'Purchase · '+p.supplier description,p.total amount,p.branch_id branch_id,'OUT' direction FROM purchases p WHERE UPPER(REPLACE(p.payment_method,'-',''))=?"
+            args=[method]
+            if branch_id is not None: sql+=" AND p.branch_id=?"; args.append(int(branch_id))
+            for r in c.execute(sql,args).fetchall(): events.append(dict(r))
+            sql="SELECT e.expense_date ts,COALESCE(e.reference,e.expense_no) ref,'Expense · '+e.description description,e.amount amount,e.branch_id branch_id,'OUT' direction FROM expenses e WHERE UPPER(REPLACE(e.payment_method,'-',''))=?"
+            args=[method]
+            if branch_id is not None: sql+=" AND e.branch_id=?"; args.append(int(branch_id))
+            for r in c.execute(sql,args).fetchall(): events.append(dict(r))
+            sql="SELECT t.created_at ts,t.mpesa_code ref,'Cash deposited to Paybill · '+t.transfer_no description,t.amount amount,t.branch_id branch_id,'OUT' direction FROM financial_transfers t"
+            args=[]
+            if branch_id is not None: sql+=" WHERE t.branch_id=?"; args.append(int(branch_id))
+            for r in c.execute(sql,args).fetchall(): events.append(dict(r))
+            if branch_id is None:
+                for r in c.execute("SELECT ob.effective_at ts,'OPENING-CASH-'||ob.branch_key ref,'Opening cash balance' description,ob.amount amount,ob.branch_key branch_id,'IN' direction FROM financial_opening_balances ob WHERE ob.account='CASH'").fetchall():
+                    events.append(dict(r))
+            else:
+                for r in c.execute("SELECT ob.effective_at ts,'OPENING-CASH-'||ob.branch_key ref,'Opening cash balance' description,ob.amount amount,ob.branch_key branch_id,'IN' direction FROM financial_opening_balances ob WHERE ob.account='CASH' AND ob.branch_key=?",(int(branch_id),)).fetchall():
+                    events.append(dict(r))
+        else:
+            for r in c.execute("SELECT sp.paid_at ts,COALESCE(sp.mpesa_code,'') ref,'Sale payment · '||s.receipt_no description,sp.amount amount,s.branch_id branch_id,'IN' direction FROM sale_payments sp JOIN sales s ON s.id=sp.sale_id WHERE UPPER(sp.payment_method)='MPESA'").fetchall():
+                events.append(dict(r))
+            for r in c.execute("SELECT cp.payment_date ts,COALESCE(cp.mpesa_code,cp.reference,'') ref,'Credit repayment' description,cp.amount amount,s.branch_id branch_id,'IN' direction FROM credit_payments cp JOIN credit_accounts ca ON ca.id=cp.credit_id JOIN sales s ON s.id=ca.sale_id WHERE UPPER(cp.payment_method)='MPESA'").fetchall():
+                events.append(dict(r))
+            for r in c.execute("SELECT p.purchased_at ts,COALESCE(p.reference,p.purchase_no) ref,'Purchase · '||p.supplier description,p.total amount,p.branch_id branch_id,'OUT' direction FROM purchases p WHERE UPPER(REPLACE(p.payment_method,'-',''))='MPESA'").fetchall():
+                events.append(dict(r))
+            for r in c.execute("SELECT e.expense_date ts,COALESCE(e.reference,e.expense_no) ref,'Expense · '||e.description description,e.amount amount,e.branch_id branch_id,'OUT' direction FROM expenses e WHERE UPPER(REPLACE(e.payment_method,'-',''))='MPESA'").fetchall():
+                events.append(dict(r))
+            for r in c.execute("SELECT t.created_at ts,t.mpesa_code ref,'Cash deposit received · '||t.transfer_no description,t.amount amount,t.branch_id branch_id,'IN' direction FROM financial_transfers t").fetchall():
+                events.append(dict(r))
+            # Include Paybill C2B receipts that have not already been posted against a sale or credit payment.
+            for r in c.execute("""SELECT mt.trans_time ts,mt.trans_id ref,'Unmatched Paybill receipt · '||COALESCE(mt.bill_ref_number,'') description,mt.amount amount,NULL branch_id,'IN' direction
+                FROM mpesa_transactions mt
+                WHERE COALESCE(mt.trans_id,'')<>''
+                AND NOT EXISTS(SELECT 1 FROM sale_payments sp WHERE UPPER(COALESCE(sp.mpesa_code,''))=UPPER(mt.trans_id))
+                AND NOT EXISTS(SELECT 1 FROM credit_payments cp WHERE UPPER(COALESCE(cp.mpesa_code,''))=UPPER(mt.trans_id))""").fetchall():
+                events.append(dict(r))
+            for r in c.execute("SELECT ob.effective_at ts,'OPENING-PAYBILL' ref,'Opening Paybill balance' description,ob.amount amount,NULL branch_id,'IN' direction FROM financial_opening_balances ob WHERE ob.account='PAYBILL' AND ob.branch_key=0").fetchall():
+                events.append(dict(r))
+    finally:
+        c.close()
+    # Exclude events beyond the requested statement end and sort chronologically for a running balance.
+    events=[e for e in events if str(e.get('ts') or '')<=end]
+    events.sort(key=lambda e:(str(e.get('ts') or ''),str(e.get('ref') or '')))
+    return events
+
+
+def financial_statement_data(account, start, end, branch_id=None):
+    events=_financial_account_events(account,end,branch_id)
+    balance=0.0; opening=0.0; total_in=0.0; total_out=0.0; rows=[]
+    for e in events:
+        amount=round(float(e.get('amount') or 0),2)
+        if e['direction']=='IN':
+            balance=round(balance+amount,2)
+        else:
+            balance=round(balance-amount,2)
+        if str(e.get('ts') or '')<start:
+            opening=balance
+            continue
+        if str(e.get('ts') or '')<=end:
+            if e['direction']=='IN': total_in+=amount
+            else: total_out+=amount
+            rows.append({'date':e.get('ts') or '', 'reference':e.get('ref') or '', 'description':e.get('description') or '',
+                         'branch_id':e.get('branch_id'), 'direction':e['direction'], 'money_in':amount if e['direction']=='IN' else 0.0,
+                         'money_out':amount if e['direction']=='OUT' else 0.0, 'balance':balance})
+    return {'rows':rows,'opening':opening,'closing':balance,'money_in':round(total_in,2),'money_out':round(total_out,2)}
+
+
+def financials_page(u, query=None, message=''):
+    if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
+    query=query or {}
+    account=str(_qsval(query,'account','CASH') or 'CASH').upper()
+    if account not in ('CASH','PAYBILL'): account='CASH'
+    fd,ft,td,tt,preset=period_from_query(query)
+    start=f'{fd} {ft}:00'; end=f'{td} {tt}:59'
+    raw_branch=str(_qsval(query,'branch_id','') or '').strip()
+    branch_id=int(raw_branch) if raw_branch.isdigit() else None
+    c=core.db.c()
+    try:
+        branches=[dict(r) for r in c.execute('SELECT id,name FROM branches WHERE active=1 ORDER BY name').fetchall()]
+        opening=c.execute("SELECT account,branch_key,amount,effective_at FROM financial_opening_balances ORDER BY account,branch_key").fetchall()
+    finally: c.close()
+    if account=='PAYBILL': branch_id=None
+    data=financial_statement_data(account,start,end,branch_id)
+    rows=[]
+    for r in data['rows']:
+        branch_name=next((b['name'] for b in branches if r['branch_id'] is not None and int(b['id'])==int(r['branch_id'])),'Company / Paybill')
+        rows.append([esc(r['date']),esc(r['reference']),esc(r['description']),esc(branch_name),
+                     money(r['money_in']),money(r['money_out']),money(r['balance'])])
+    notice=f'<div class="flash error">{esc(message)}</div>' if message else ''
+    account_links=f'<div class="actions" style="margin:12px 0"><a class="btn {"gold" if account=="CASH" else ""}" href="/financials?account=CASH">CASH STATEMENT</a><a class="btn {"gold" if account=="PAYBILL" else ""}" href="/financials?account=PAYBILL">M-PESA PAYBILL STATEMENT</a></div>'
+    branch_opts='<option value="">ALL BRANCHES — COMPANY CASH</option>'+''.join(f'<option value="{int(b["id"])}" {"selected" if branch_id==int(b["id"]) else ""}>{esc(b["name"])}</option>' for b in branches)
+    branch_filter='' if account=='PAYBILL' else f'<div><label>Cash statement branch</label><select name="branch_id">{branch_opts}</select></div>'
+    export=f'/financials/export?account={account}&format={{fmt}}&start={quote(start)}&end={quote(end)}&branch_id={branch_id or ""}'
+    statement=f'''<section class="card"><div class="section-head"><h2>{"Cash Statement" if account=="CASH" else "M-Pesa Paybill Statement"}</h2><span class="pill">ADMINISTRATOR ONLY · {esc(preset)}</span></div>
+    <form method="get" action="/financials" class="form-grid"><input type="hidden" name="account" value="{account}">{branch_filter}
+    <div><label>From date</label><input type="date" name="from_date" value="{esc(fd)}" required></div><div><label>From time</label><input type="time" name="from_time" value="{esc(ft)}"></div>
+    <div><label>To date</label><input type="date" name="to_date" value="{esc(td)}" required></div><div><label>To time</label><input type="time" name="to_time" value="{esc(tt)}"></div>
+    <div class="actions" style="align-self:end"><button class="btn gold">APPLY FILTER</button></div></form>
+    <div class="actions" style="margin:10px 0"><a class="btn" href="/financials?account={account}&preset=TODAY">TODAY</a><a class="btn" href="/financials?account={account}&preset=THIS_WEEK">THIS WEEK</a><a class="btn" href="/financials?account={account}&preset=THIS_MONTH">THIS MONTH</a><a class="btn" href="/financials?account={account}&preset=LAST_MONTH">LAST MONTH</a></div>
+    <div class="metric-grid"><div class="metric"><div class="muted">OPENING BALANCE</div><div class="v">{money(data["opening"])}</div></div><div class="metric"><div class="muted">TOTAL MONEY IN</div><div class="v">{money(data["money_in"])}</div></div><div class="metric"><div class="muted">TOTAL MONEY OUT</div><div class="v">{money(data["money_out"])}</div></div><div class="metric"><div class="muted">CLOSING BALANCE</div><div class="v">{money(data["closing"])}</div></div></div>
+    <div class="actions" style="margin:12px 0"><button class="btn" type="button" onclick="window.print()">PRINT STATEMENT</button><a class="btn" href="{export.format(fmt="pdf")}">DOWNLOAD PDF</a><a class="btn" href="{export.format(fmt="xlsx")}">DOWNLOAD EXCEL</a></div>
+    {html_table(["Date & Time","Transaction Code / Reference","Description","Branch","Money In","Money Out","Running Balance"],rows,"No financial transactions found for this period.")}</section>'''
+    transfer_form=f'''<section class="card" style="margin-top:14px"><div class="section-head"><h2>Transfer Cash to Paybill</h2><span class="pill">ADMINISTRATOR ONLY</span></div>
+    <p class="muted">This is an internal transfer: cash decreases and Paybill increases by the same amount. It is not sales income or an expense.</p>
+    <form method="post" action="/financials" class="form-grid">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="transfer">
+    <div><label>Source branch cash</label><select name="branch_id" required><option value="">SELECT BRANCH</option>{''.join(f'<option value="{int(b["id"])}">{esc(b["name"])}</option>' for b in branches)}</select></div>
+    <div><label>Amount deposited (KSh)</label><input type="number" name="amount" min="0.01" step="0.01" required></div>
+    <div><label>M-Pesa deposit transaction code</label><input name="mpesa_code" maxlength="40" required placeholder="e.g. QAB1234567"></div>
+    <div><label>Deposit slip / bank reference (optional)</label><input name="deposit_reference" maxlength="100"></div>
+    <div style="grid-column:1/-1"><label>Note / description</label><input name="note" maxlength="250" required placeholder="Cash deposited to business Paybill"></div>
+    <div class="actions"><button class="btn gold" type="submit">CONFIRM CASH → PAYBILL TRANSFER</button></div></form></section>'''
+    opening_form=f'''<section class="card" style="margin-top:14px"><div class="section-head"><h2>Set Initial Financial Balances</h2><span class="pill">ONE-TIME SETUP</span></div>
+    <p class="muted">Enter verified balances already held when the system's financial tracking starts. Each account/branch can be initialized only once; the entry is retained in the audit trail.</p>
+    <form method="post" action="/financials" class="form-grid">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="opening">
+    <div><label>Account</label><select name="account" id="opening_account" onchange="document.getElementById('opening_branch_wrap').style.display=this.value==='CASH'?'block':'none'"><option value="CASH">Cash</option><option value="PAYBILL">M-Pesa Paybill</option></select></div>
+    <div id="opening_branch_wrap"><label>Branch (for cash opening balance)</label><select name="branch_id" required><option value="">SELECT BRANCH</option>{''.join(f'<option value="{int(b["id"])}">{esc(b["name"])}</option>' for b in branches)}</select></div>
+    <div><label>Verified opening balance (KSh)</label><input type="number" name="amount" min="0" step="0.01" required></div>
+    <div><label>Effective date & time</label><input type="datetime-local" name="effective_at" value="{dt.datetime.now().strftime('%Y-%m-%dT%H:%M')}" required></div>
+    <div style="grid-column:1/-1"><label>Verification note</label><input name="note" maxlength="250" required></div>
+    <div class="actions"><button class="btn gold">SAVE INITIAL BALANCE</button></div></form></section>'''
+    opening_rows=[[esc(r['account']),esc(next((b['name'] for b in branches if int(b['id'])==int(r['branch_key'])),'Company / Paybill') if r['account']=='CASH' else 'Company / Paybill'),money(r['amount']),esc(r['effective_at'])] for r in opening]
+    opening_section=f'<section class="card" style="margin-top:14px"><h3>Recorded Initial Balances</h3>{html_table(["Account","Branch","Amount","Effective From"],opening_rows,"No initial balances have been entered.")}</section>'
+    return layout(u,'Cash & Paybill Statements',notice+account_links+statement+transfer_form+opening_form+opening_section,'/financials','Administrator-only cash movement and Paybill reconciliation')
+
+
+def financials_export(handler,u,query):
+    if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
+    account=str(_qsval(query,'account','CASH') or 'CASH').upper()
+    if account not in ('CASH','PAYBILL'): raise ValueError('Invalid financial account.')
+    start=str(_qsval(query,'start','1900-01-01 00:00:00')); end=str(_qsval(query,'end','2999-12-31 23:59:59'))
+    raw_branch=str(_qsval(query,'branch_id','') or '').strip()
+    branch_id=int(raw_branch) if account=='CASH' and raw_branch.isdigit() else None
+    data=financial_statement_data(account,start,end,branch_id)
+    headers=['Date & Time','Transaction Code / Reference','Description','Branch','Money In','Money Out','Running Balance']
+    c=core.db.c()
+    try: branches=[dict(r) for r in c.execute('SELECT id,name FROM branches').fetchall()]
+    finally: c.close()
+    rows=[]
+    for r in data['rows']:
+        bn=next((b['name'] for b in branches if r['branch_id'] is not None and int(b['id'])==int(r['branch_id'])),'Company / Paybill')
+        rows.append([r['date'],r['reference'],r['description'],bn,r['money_in'],r['money_out'],r['balance']])
+    title='MONTEZ LIQUOR '+('CASH' if account=='CASH' else 'M-PESA PAYBILL')+' STATEMENT'
+    out,ctype,filename=_export_rows(title,headers,rows,_qsval(query,'format','xlsx'))
+    return send_file(handler,out,ctype,filename)
+
+
+def financials_post(handler,u,form):
+    if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
+    action=str(form.get('action','')).lower()
+    c=core.db.c()
+    try:
+        c.execute('BEGIN IMMEDIATE')
+        ts=now()
+        if action=='transfer':
+            branch_id=int(form.get('branch_id','0') or 0)
+            amount=round(float(form.get('amount','0') or 0),2)
+            code=str(form.get('mpesa_code','')).strip().upper()
+            deposit_ref=str(form.get('deposit_reference','')).strip()
+            note=str(form.get('note','')).strip()
+            if branch_id<=0 or amount<=0 or not code or len(note)<3: raise ValueError('Select a branch and enter a positive amount, M-Pesa code and description.')
+            branch=c.execute('SELECT name FROM branches WHERE id=? AND active=1',(branch_id,)).fetchone()
+            if not branch: raise ValueError('Select an active registered branch.')
+            if c.execute('SELECT 1 FROM financial_transfers WHERE UPPER(mpesa_code)=?',(code,)).fetchone(): raise ValueError('This M-Pesa deposit code has already been used for a transfer.')
+            # Recompute the branch cash balance inside the same write transaction to prevent overdrawing.
+            current=financial_statement_data('CASH','1900-01-01 00:00:00','2999-12-31 23:59:59',branch_id)['closing']
+            if amount>current: raise ValueError(f'Insufficient recorded cash in {branch["name"]}. Available: {money(current)}.')
+            transfer_no='TRF-'+dt.datetime.now().strftime('%Y%m%d%H%M%S')+'-'+secrets.token_hex(3).upper()
+            c.execute('INSERT INTO financial_transfers(transfer_no,branch_id,amount,mpesa_code,deposit_reference,note,created_at,created_by) VALUES(?,?,?,?,?,?,?,?)',(transfer_no,branch_id,amount,code,deposit_ref,note,ts,u['id']))
+            core.db.audit(c,u,'CASH_TO_PAYBILL_TRANSFER','FINANCIAL_TRANSFER',transfer_no,f'branch={branch["name"]}; amount={amount:.2f}; mpesa_code={code}; deposit_reference={deposit_ref}; note={note}; cash_decreased; paybill_increased; no revenue or expense impact')
+            c.commit()
+            add_flash(session_token(handler),f'Transfer {transfer_no} posted. Cash reduced by {money(amount)} and Paybill increased by the same amount.','success')
+            return redirect(handler,'/financials?account=CASH')
+        if action=='opening':
+            account=str(form.get('account','CASH')).upper()
+            if account not in ('CASH','PAYBILL'): raise ValueError('Select Cash or Paybill.')
+            branch_key=int(form.get('branch_id','0') or 0) if account=='CASH' else 0
+            amount=round(float(form.get('amount','-1') or -1),2)
+            effective=str(form.get('effective_at','')).strip().replace('T',' ')
+            note=str(form.get('note','')).strip()
+            if amount<0 or len(note)<5: raise ValueError('Enter a non-negative opening balance and a verification note of at least 5 characters.')
+            if account=='CASH' and not c.execute('SELECT 1 FROM branches WHERE id=? AND active=1',(branch_key,)).fetchone(): raise ValueError('Select an active branch for the cash opening balance.')
+            try: dt.datetime.strptime(effective,'%Y-%m-%d %H:%M')
+            except Exception: raise ValueError('Enter a valid effective date and time.')
+            c.execute('INSERT INTO financial_opening_balances(account,branch_key,amount,effective_at,note,created_at,created_by) VALUES(?,?,?,?,?,?,?)',(account,branch_key,amount,effective+':00',note,ts,u['id']))
+            core.db.audit(c,u,'SET_FINANCIAL_OPENING_BALANCE','FINANCIAL_OPENING_BALANCE',f'{account}:{branch_key}',f'amount={amount:.2f}; effective_at={effective}; note={note}')
+            c.commit()
+            add_flash(session_token(handler),'Initial financial balance recorded and locked.','success')
+            return redirect(handler,'/financials?account='+account)
+        raise ValueError('Unknown financial action.')
+    except Exception:
+        c.rollback()
+        raise
+    finally:
+        c.close()
+
+
 def admin_record_change(u, form):
     entity=(form.get('entity') or '').strip().lower(); action=(form.get('action') or '').strip().lower(); reason=(form.get('reason') or '').strip()
     if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
@@ -2342,6 +2556,10 @@ class Handler(BaseHTTPRequestHandler):
             if billing.get('suspended') and role_name(u)!='ADMIN': return send_html(self,subscription_block_page(billing),402)
             if path=='/api/mpesa/stk-status': return send_json(self,mpesa_stk_status(_qsval(qs,'checkout_request_id'),u,qs))
             if path=='/api/mpesa/live-messages': return send_json(self,mpesa_live_messages_json(u,qs))
+            if path=='/financials':
+                if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
+                return send_html(self,financials_page(u,qs))
+            if path=='/financials/export': return financials_export(self,u,qs)
             if path=='/mpesa/monitor': return send_html(self,mpesa_monitor_page(u))
             if path=='/mpesa/recovery': return send_html(self,mpesa_recovery_page(u))
             if path in ('/','/sales-dashboard') and core.get_setting('dashboard_enabled','YES')!='YES': raise PermissionError('Dashboard access is disabled by the Administrator.')
@@ -2813,6 +3031,9 @@ def do_POST(self):
                     core.update_settings(u,form); msg='Settings saved successfully.'
                 add_flash(session_token(self),msg,'success'); return redirect(self,'/settings')
             except Exception as e: return send_html(self,settings_page(u,str(e)),400)
+        if path=='/financials':
+            try: return financials_post(self,u,form)
+            except Exception as e: return send_html(self,financials_page(u,{'account':'CASH'},str(e)),400)
         if path=='/mpesa/recovery':
             if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
             try:
