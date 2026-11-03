@@ -544,15 +544,22 @@ def create_sale(u, data):
 def products(branch_id=None):
     c=db.c()
     if branch_id:
-        rows=c.execute('''SELECT p.*,COALESCE(bs.qty,0) stock_qty,COALESCE(bs.avg_cost,p.avg_cost) avg_cost,
-                          COALESCE(bs.sell_price,p.sell_price) sell_price,COALESCE(bs.wholesale_price,p.wholesale_price) wholesale_price,
-                          COALESCE(bs.reorder_level,p.reorder_level) reorder_level
+        rows=c.execute('''SELECT p.*,COALESCE(bs.qty,0) branch_qty,COALESCE(bs.avg_cost,p.avg_cost) branch_cost,
+                          COALESCE(bs.sell_price,p.sell_price) branch_retail_price,COALESCE(bs.wholesale_price,p.wholesale_price) branch_wholesale_price,
+                          COALESCE(bs.reorder_level,p.reorder_level) branch_reorder
                           FROM products p LEFT JOIN branch_stock bs ON bs.product_id=p.id AND bs.branch_id=?
                           WHERE p.active=1 ORDER BY p.name''',(int(branch_id),)).fetchall()
     else:
-        rows=c.execute('''SELECT p.*,COALESCE(SUM(bs.qty),0) stock_qty,COALESCE(AVG(bs.avg_cost),p.avg_cost) avg_cost
+        rows=c.execute('''SELECT p.*,COALESCE(SUM(bs.qty),0) branch_qty,COALESCE(AVG(bs.avg_cost),p.avg_cost) branch_cost
                           FROM products p LEFT JOIN branch_stock bs ON bs.product_id=p.id WHERE p.active=1 GROUP BY p.id ORDER BY p.name''').fetchall()
-    c.close(); return [dict(r) for r in rows]
+    out=[]
+    for row in rows:
+        item=dict(row); item['stock_qty']=item.get('branch_qty',0); item['avg_cost']=item.get('branch_cost',item.get('avg_cost',0))
+        if item.get('branch_retail_price') is not None: item['sell_price']=item['branch_retail_price']
+        if item.get('branch_wholesale_price') is not None: item['wholesale_price']=item['branch_wholesale_price']
+        if item.get('branch_reorder') is not None: item['reorder_level']=item['branch_reorder']
+        out.append(item)
+    c.close(); return out
 
 def customers():
     c=db.c(); rows=c.execute('SELECT * FROM customers WHERE active=1 ORDER BY full_name').fetchall(); c.close(); return [dict(r) for r in rows]
