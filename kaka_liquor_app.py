@@ -2236,6 +2236,11 @@ def _financial_account_events(account, end, branch_id=None, conn=None):
     finally:
         if conn is None: c.close()
     # Exclude events beyond the requested statement end and sort chronologically for a running balance.
+    for e in events:
+        raw_ts=str(e.get('ts') or '')
+        if re.fullmatch(r'\\d{14}',raw_ts):
+            try: e['ts']=dt.datetime.strptime(raw_ts,'%Y%m%d%H%M%S').strftime('%Y-%m-%d %H:%M:%S')
+            except ValueError: pass
     events=[e for e in events if str(e.get('ts') or '')<=end]
     events.sort(key=lambda e:(str(e.get('ts') or ''),str(e.get('ref') or '')))
     return events
@@ -2359,6 +2364,7 @@ def financials_post(handler,u,form):
             branch=c.execute('SELECT name FROM branches WHERE id=? AND active=1',(branch_id,)).fetchone()
             if not branch: raise ValueError('Select an active registered branch.')
             if c.execute('SELECT 1 FROM financial_transfers WHERE UPPER(mpesa_code)=?',(code,)).fetchone(): raise ValueError('This M-Pesa deposit code has already been used for a transfer.')
+            if c.execute("SELECT 1 FROM sale_payments WHERE UPPER(COALESCE(mpesa_code,''))=? UNION ALL SELECT 1 FROM credit_payments WHERE UPPER(COALESCE(mpesa_code,''))=? UNION ALL SELECT 1 FROM mpesa_stk_requests WHERE UPPER(COALESCE(mpesa_code,''))=?",(code,code,code)).fetchone(): raise ValueError('This M-Pesa code is already allocated to a sale, credit repayment or STK payment.')
             # Recompute the branch cash balance inside the same write transaction to prevent overdrawing.
             current=financial_statement_data('CASH','1900-01-01 00:00:00','2999-12-31 23:59:59',branch_id,c)['closing']
             if amount>current: raise ValueError(f'Insufficient recorded cash in {branch["name"]}. Available: {money(current)}.')
@@ -2380,11 +2386,11 @@ def financials_post(handler,u,form):
                 raise ValueError('Enter a valid account, direction, positive amount, reference and description of at least 5 characters.')
             try: dt.datetime.strptime(occurred,'%Y-%m-%d %H:%M')
             except Exception: raise ValueError('Enter a valid transaction date and time.')
-            if account=='CASH':
-                if not c.execute('SELECT 1 FROM branches WHERE id=? AND active=1',(branch_id,)).fetchone(): raise ValueError('Select an active branch for this cash movement.')
-                if direction=='OUT':
-                    available=financial_statement_data('CASH','1900-01-01 00:00:00','2999-12-31 23:59:59',branch_id)['closing']
-                    if amount>available: raise ValueError(f'Insufficient recorded cash. Available: {money(available)}.')
+            if account=='CASH' and not c.execute('SELECT 1 FROM branches WHERE id=? AND active=1',(branch_id,)).fetchone():
+                raise ValueError('Select an active branch for this cash movement.')
+            if direction=='OUT':
+                available=financial_statement_data(account,'1900-01-01 00:00:00','2999-12-31 23:59:59',branch_id,c)['closing']
+                if amount>available: raise ValueError(f'Insufficient recorded {account.lower()} balance. Available: {money(available)}.')
             c.execute('INSERT INTO financial_manual_entries(account,branch_id,direction,amount,reference,description,occurred_at,created_at,created_by) VALUES(?,?,?,?,?,?,?,?,?)',(account,branch_id,direction,amount,reference,description,occurred+':00',ts,u['id']))
             core.db.audit(c,u,'RECORD_FINANCIAL_MOVEMENT','FINANCIAL_ENTRY',reference,f'account={account}; direction={direction}; amount={amount:.2f}; branch_id={branch_id}; description={description}; occurred_at={occurred}')
             c.commit()
