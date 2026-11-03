@@ -13,3 +13,37 @@ jobs:
           python-version: '3.12'
       - name: Compile application modules
         run: python -m compileall -q .
+      - name: Branch stock isolation smoke test
+        env:
+          KAKA_DATA_DIR: /tmp/montez-branch-stock-test
+          KAKA_INITIAL_ADMIN_PASSWORD: Test-Only-Strong-Password-2026
+        run: |
+          python - <<'PY'
+          import os, shutil
+          shutil.rmtree(os.environ['KAKA_DATA_DIR'], ignore_errors=True)
+          import kaka_core as core
+          from kaka_liquor_app import save_purchase
+          c = core.db.c()
+          ts = core.now_str()
+          b1 = c.execute("INSERT INTO branches(name,code,created_at,updated_at) VALUES(?,?,?,?)", ("Test Branch A","TSTA",ts,ts)).lastrowid
+          b2 = c.execute("INSERT INTO branches(name,code,created_at,updated_at) VALUES(?,?,?,?)", ("Test Branch B","TSTB",ts,ts)).lastrowid
+          p = c.execute("INSERT INTO products(sku,name,category,unit,sell_price,wholesale_price,avg_cost,stock_qty,reorder_level,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", ("TEST-001","Test Product","Test","bottle",10,10,5,0,5,1,ts,ts)).lastrowid
+          for bid, qty in ((b1,100),(b2,80)):
+              c.execute("INSERT INTO branch_stock(branch_id,product_id,qty,avg_cost,buy_price,sell_price,wholesale_price,reorder_level,updated_at) VALUES(?,?,?,?,?,?,?,?,?)", (bid,p,qty,5,5,10,10,5,ts))
+          uid = c.execute("INSERT INTO users(username,full_name,password_hash,role,access_role,active,created_at,updated_at,branch_id) VALUES(?,?,?,?,?,?,?,?,?)", ("branchb","Branch B Tester",core.sha("test-password"),"SALES","SALES",1,ts,ts,b2)).lastrowid
+          c.commit()
+          user = {"id":uid,"branch_id":b2,"username":"branchb","full_name":"Branch B Tester","access_role":"SALES","role":"SALES"}
+          core.create_sale(user, {"cart":[{"product_id":p,"qty":10}],"payments":[{"amount":100,"payment_method":"CASH","mpesa_code":""}],"customer":{},"sale_type":"RETAIL"})
+          c = core.db.c()
+          q1 = c.execute("SELECT qty FROM branch_stock WHERE branch_id=? AND product_id=?",(b1,p)).fetchone()["qty"]
+          q2 = c.execute("SELECT qty FROM branch_stock WHERE branch_id=? AND product_id=?",(b2,p)).fetchone()["qty"]
+          assert (q1,q2)==(100,70), (q1,q2)
+          c.close()
+          save_purchase(user, {"supplier":"Test Supplier","payment_method":"Cash","product_id":str(p),"qty":"5","unit_cost":"7"})
+          c = core.db.c()
+          q1 = c.execute("SELECT qty FROM branch_stock WHERE branch_id=? AND product_id=?",(b1,p)).fetchone()["qty"]
+          q2 = c.execute("SELECT qty FROM branch_stock WHERE branch_id=? AND product_id=?",(b2,p)).fetchone()["qty"]
+          assert (q1,q2)==(100,75), (q1,q2)
+          c.close()
+          print("PASS: Branch B sale and purchase did not change Branch A stock.")
+          PY
