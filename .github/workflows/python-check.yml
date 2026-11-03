@@ -22,7 +22,7 @@ jobs:
           import os, shutil
           shutil.rmtree(os.environ['KAKA_DATA_DIR'], ignore_errors=True)
           import kaka_core as core
-          from kaka_liquor_app import save_purchase
+          from kaka_liquor_app import save_purchase, stock_transfer_action, stock_count_adjustment
           c = core.db.c()
           ts = core.now_str()
           b1 = c.execute("INSERT INTO branches(name,code,created_at,updated_at) VALUES(?,?,?,?)", ("Test Branch A","TSTA",ts,ts)).lastrowid
@@ -51,5 +51,26 @@ jobs:
           report = core.stock_report("1900-01-01 00:00:00","2999-12-31 23:59:59",b2)
           product_row = next(row for row in report if row["sku"]=="TEST-001")
           assert (product_row["opening"],product_row["purchased"],product_row["sold"],product_row["closing"]) == (80,5,10,75), product_row
-          print("PASS: Branch B sale and purchase did not change Branch A stock; opening/purchased/sold/closing reconcile.")
+          today = core.now().strftime("%Y-%m-%d")
+          dash = core.dashboard(b2)
+          assert abs(float(dash["today_cogs"])-50)<0.01, dash
+          assert abs(float(dash["today_gross_profit"])-50)<0.01, dash
+          admin_id = c.execute("INSERT INTO users(username,full_name,password_hash,role,access_role,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)", ("testadmin","Test Admin",core.sha("test-password"),"ADMIN","ADMIN",1,ts,ts)).lastrowid
+          c.commit()
+          admin = {"id":admin_id,"branch_id":None,"username":"testadmin","full_name":"Test Admin","access_role":"ADMIN","role":"ADMIN"}
+          stock_transfer_action(user, {"action":"request","destination_branch_id":str(b1),"product_id":str(p),"qty":"10","reason":"Automated transfer approval test"})
+          c = core.db.c()
+          transfer_id = c.execute("SELECT id FROM stock_transfers WHERE source_branch_id=? AND destination_branch_id=? AND product_id=? AND status='PENDING' ORDER BY id DESC LIMIT 1",(b2,b1,p)).fetchone()["id"]
+          c.close()
+          stock_transfer_action(admin, {"action":"approve","transfer_id":str(transfer_id)})
+          stock_count_adjustment(admin, {"branch_id":str(b2),"product_id":str(p),"physical_qty":"60","count_reason":"Automated physical stock count test"})
+          c = core.db.c()
+          q1 = c.execute("SELECT qty FROM branch_stock WHERE branch_id=? AND product_id=?",(b1,p)).fetchone()["qty"]
+          q2 = c.execute("SELECT qty FROM branch_stock WHERE branch_id=? AND product_id=?",(b2,p)).fetchone()["qty"]
+          c.close()
+          assert (q1,q2)==(110,60), (q1,q2)
+          report = core.stock_report("1900-01-01 00:00:00","2999-12-31 23:59:59",b2)
+          product_row = next(row for row in report if row["sku"]=="TEST-001")
+          assert (product_row["opening"],product_row["purchased"],product_row["sold"],product_row["adjustments"],product_row["closing"]) == (80,5,10,-15,60), product_row
+          print("PASS: Branch isolation, opening/purchase/sale/closing reconciliation, COGS/gross profit, transfer approval and stock-count variance.")
           PY
