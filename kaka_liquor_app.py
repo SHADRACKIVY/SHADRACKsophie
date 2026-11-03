@@ -2024,6 +2024,8 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/customers/search':
                 u=session_user(self, touch=True)
                 if not u: return send_json(self,{'error':'Session expired. Please sign in again.'},401)
+                billing=subscription_billing_state()
+                if billing.get('suspended') and role_name(u)!='ADMIN': return send_json(self,{'error':'Software subscription overdue. Contact Administrator.'},402)
                 require_perm_user(u,'CREATE_SALE'); q=(_qsval(qs,'q','') or '').strip()
                 if not q: return send_json(self,{'results':[]})
                 c=core.db.c(); like=f'%{q}%'; rows=c.execute("SELECT id,full_name,phone,id_no,address FROM customers WHERE active=1 AND (id_no LIKE ? OR full_name LIKE ? OR phone LIKE ? OR customer_no LIKE ?) ORDER BY CASE WHEN id_no=? THEN 0 WHEN phone=? THEN 0 WHEN lower(full_name) LIKE lower(?) THEN 0 ELSE 1 END, full_name LIMIT 30",(like,like,like,like,q,q,f'{q}%')).fetchall(); c.close(); return send_json(self,{'results':[dict(r) for r in rows]})
