@@ -107,6 +107,9 @@ class DB:
         # Branch stock rows are initialized after legacy product columns have been upgraded.
         c.execute('CREATE INDEX IF NOT EXISTS idx_branch_stock_product ON branch_stock(product_id,branch_id)')
         c.execute('CREATE INDEX IF NOT EXISTS idx_movements_branch_time ON stock_movements(branch_id,movement_time)')
+        c.execute('''CREATE TABLE IF NOT EXISTS stock_transfers(id INTEGER PRIMARY KEY AUTOINCREMENT,transfer_no TEXT UNIQUE NOT NULL,source_branch_id INTEGER NOT NULL REFERENCES branches(id),destination_branch_id INTEGER NOT NULL REFERENCES branches(id),product_id INTEGER NOT NULL REFERENCES products(id),qty REAL NOT NULL,unit_cost REAL NOT NULL DEFAULT 0,reason TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'PENDING',requested_by INTEGER NOT NULL REFERENCES users(id),approved_by INTEGER REFERENCES users(id),created_at TEXT NOT NULL,approved_at TEXT,rejection_reason TEXT)''')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_stock_transfers_source_status ON stock_transfers(source_branch_id,status,created_at)')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_stock_transfers_destination_status ON stock_transfers(destination_branch_id,status,created_at)')
         c.execute('CREATE INDEX IF NOT EXISTS idx_purchases_branch_date ON purchases(branch_id,purchased_at)')
         # Branch management migration: keep historic sales attributed to the branch at time of sale.
         user_cols={r['name'] for r in c.execute('PRAGMA table_info(users)').fetchall()}
