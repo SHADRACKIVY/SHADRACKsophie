@@ -12,3 +12,59 @@ jobs:
           python-version: '3.12'
       - name: Compile application modules
         run: python -m compileall -q .
+      - name: Settings and role permissions smoke test
+        env:
+          KAKA_DATA_DIR: /tmp/montez-role-settings-test
+          KAKA_INITIAL_ADMIN_PASSWORD: Test-Only-Strong-Password-2026
+        run: |
+          python - <<'PY'
+          import os, shutil
+          shutil.rmtree(os.environ['KAKA_DATA_DIR'], ignore_errors=True)
+          import kaka_core as core
+          from kaka_liquor_app import save_user, admin_edit_user, layout
+          c=core.db.c()
+          ts=core.now_str()
+          bid=c.execute("INSERT INTO branches(name,code,created_at,updated_at) VALUES(?,?,?,?)",("Role Test Branch","ROLE-01",ts,ts)).lastrowid
+          admin_id=c.execute("INSERT INTO users(username,full_name,password_hash,role,access_role,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",("testadmin","Test Admin",core.sha("admin-test-pass"),"ADMIN","ADMIN",1,ts,ts)).lastrowid
+          c.commit(); c.close()
+          admin={"id":admin_id,"username":"testadmin","full_name":"Test Admin","access_role":"ADMIN","role":"ADMIN","branch_id":None}
+          core.update_settings(admin,{"default_unit":"crate","mpesa_recovery_match_window_minutes":"60","change_reason":"CI settings test"})
+          assert core.get_setting("default_unit")=="crate"
+          assert core.get_setting("mpesa_recovery_match_window_minutes")=="60"
+          try:
+              core.update_settings(admin,{"mpesa_recovery_match_window_minutes":"4","change_reason":"CI invalid range test"})
+              raise AssertionError("Invalid M-Pesa recovery window was accepted.")
+          except ValueError:
+              pass
+          manager_id=save_user(admin,{"username":"ci_role_manager","full_name":"CI Role Manager","password":"manager-test-pass","role":"MANAGEMENT","branch_id":""})
+          sales_id=save_user(admin,{"username":"ci_role_sales","full_name":"CI Role Sales","password":"sales-test-pass","role":"SALES","branch_id":str(bid)})
+          core.update_permissions(admin,{"roles":{"MANAGEMENT":{"VIEW_STOCK":True,"VIEW_REPORTS":False,"MANAGE_SETTINGS":True},"SALES":{"CREATE_SALE":True,"MANAGE_USERS":True}},"users":{}})
+          manager={"id":manager_id,"username":"ci_role_manager","full_name":"CI Role Manager","access_role":"MANAGEMENT","role":"SALES","branch_id":None}
+          sales={"id":sales_id,"username":"ci_role_sales","full_name":"CI Role Sales","access_role":"SALES","role":"SALES","branch_id":bid}
+          assert core.effective_permissions(manager)["VIEW_STOCK"] is True
+          assert core.effective_permissions(manager)["VIEW_REPORTS"] is False
+          assert core.effective_permissions(manager)["MANAGE_SETTINGS"] is False
+          assert core.effective_permissions(sales)["CREATE_SALE"] is True
+          assert core.effective_permissions(sales)["MANAGE_USERS"] is False
+          assert "Stock Transfers / Stock Count" in layout(manager,"Test","") 
+          assert "Stock Transfers / Stock Count" not in layout(sales,"Test","")
+          c=core.db.c()
+          c.execute("INSERT INTO user_permissions(user_id,key,enabled) VALUES(?,?,0)",(sales_id,"VIEW_STOCK"))
+          c.commit(); c.close()
+          admin_edit_user(admin,{"user_id":str(sales_id),"full_name":"CI Role Sales","role":"MANAGEMENT","active":"1","branch_id":str(bid)})
+          c=core.db.c()
+          row=c.execute("SELECT access_role,branch_id,home_branch_id FROM users WHERE id=?",(sales_id,)).fetchone()
+          overrides=c.execute("SELECT COUNT(*) n FROM user_permissions WHERE user_id=?",(sales_id,)).fetchone()["n"]
+          c.close()
+          assert row["access_role"]=="MANAGEMENT" and row["branch_id"]==bid and row["home_branch_id"]==bid
+          assert overrides==0
+          changed={"id":sales_id,"username":"sales","full_name":"Sales","access_role":"MANAGEMENT","role":"SALES","branch_id":bid}
+          assert core.effective_permissions(changed)["VIEW_STOCK"] is True
+          try:
+              admin_edit_user(admin,{"user_id":str(sales_id),"full_name":"Sales","role":"MANAGEMENT","active":"1","branch_id":str(bid+100)})
+              raise AssertionError("Branch-bound account was moved.")
+          except PermissionError:
+              pass
+          admin_edit_user(admin,{"user_id":str(sales_id),"full_name":"Sales","role":"SALES","active":"1","branch_id":str(bid)})
+          print("PASS: Settings persistence, validation, permission profiles, management navigation, role changes and permanent Sales branch assignment.")
+          PY
