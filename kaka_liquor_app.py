@@ -306,7 +306,8 @@ def layout(u, title, content, active='', subtitle='Business control center'):
     if role=='ADMIN':
         nav += [('Branch Registration','/branches'),('Branch Performance','/branch-performance'),('Cash & Paybill Statements','/financials'),(setting_label('nav_users','User Management'),'/users'),(setting_label('nav_settings','Settings'),'/settings'),('M-Pesa Monitor','/mpesa/monitor'),('Payment Recovery','/mpesa/recovery'),(setting_label('nav_ledger','Ledger & P&L'),'/ledger'),(setting_label('nav_profit_loss','Profit & Loss'),'/profit-loss'),(setting_label('nav_expense_report','Expense Report'),'/expense-report'),(setting_label('nav_backup','Backup'),'/backup'),(setting_label('nav_audit','Audit Log'),'/audit')]
     else:
-        perm_map={'/':'VIEW_DASHBOARD','/sales':'CREATE_SALE','/sales-dashboard':'VIEW_DASHBOARD','/purchases':'CREATE_PURCHASE','/expenses':'RECORD_EXPENSE','/customers':'MANAGE_CUSTOMERS','/reports':'VIEW_REPORTS','/stock-report':'VIEW_STOCK','/stock-transfers':'VIEW_STOCK','/reorder-report':'VIEW_STOCK','/live':'LIVE_MONITORING','/products':'MANAGE_PRODUCTS','/ai':'AI_ASSISTANT','/expense-report':'VIEW_REPORTS','/ledger':'VIEW_LEDGER','/profit-loss':'VIEW_LEDGER'}
+        perm_map={'/':'VIEW_DASHBOARD','/sales':'CREATE_SALE','/sales-dashboard':'VIEW_DASHBOARD','/purchases':'CREATE_PURCHASE','/expenses':'RECORD_EXPENSE','/customers':'MANAGE_CUSTOMERS','/reports':'VIEW_REPORTS','/stock-report':'VIEW_STOCK','/reorder-report':'VIEW_STOCK','/live':'LIVE_MONITORING','/products':'MANAGE_PRODUCTS','/ai':'AI_ASSISTANT','/expense-report':'VIEW_REPORTS','/ledger':'VIEW_LEDGER','/profit-loss':'VIEW_LEDGER'}
+        if role=='MANAGEMENT': perm_map['/stock-transfers']='VIEW_STOCK'
         nav=[(label,href) for label,href in nav if perm_map.get(href) and allowed(u,perm_map[href])]
         if role=='MANAGEMENT':
             if allowed(u,'VIEW_REPORTS'): nav.append(('Branch Performance','/branch-performance'))
