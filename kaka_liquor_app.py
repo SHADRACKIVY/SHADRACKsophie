@@ -566,7 +566,7 @@ def admin_set_stock(u, form):
 
 
 def record_opening_stock(u, form):
-    if role_name(u) not in ('ADMIN','SALES') or not allowed(u,'MANAGE_PRODUCTS'):
+    if role_name(u) not in ('ADMIN','MANAGEMENT','SALES') or not allowed(u,'MANAGE_PRODUCTS'):
         raise PermissionError('Product Registration permission is required.')
     pid=int(form.get('product_id','0') or 0)
     qty=float(form.get('opening_qty','0') or 0)
@@ -1454,10 +1454,10 @@ def live_page(u, query=None):
 
 def products_page(u, message='', query=None):
     role=role_name(u)
-    if role not in ('ADMIN','SALES') or not allowed(u,'MANAGE_PRODUCTS'):
+    if role not in ('ADMIN','MANAGEMENT','SALES') or not allowed(u,'MANAGE_PRODUCTS'):
         raise PermissionError('Product Registration is disabled for your account. Contact Administrator.')
     c=core.db.c(); branches=[dict(x) for x in c.execute('SELECT id,name FROM branches WHERE active=1 ORDER BY name').fetchall()]
-    if role=='ADMIN':
+    if role in ('ADMIN','MANAGEMENT'):
         raw=_qsval(query or {},'branch_id',''); branch_id=int(raw) if str(raw).isdigit() else 0
         if branch_id and not any(int(b['id'])==branch_id for b in branches): c.close(); raise PermissionError('Selected branch is unavailable.')
     else: branch_id=int(u.get('branch_id') or 0)
@@ -1485,13 +1485,13 @@ def products_page(u, message='', query=None):
         title='Product Registration & Branch Stock Editor'; subtitle='Edit costs and prices for the selected branch'
     else:
         table=html_table(['Product Name','SKU','Category','Unit','Retail / Wholesale Price','Stock','Reorder','Status'],[[esc(r['name']),esc(r['sku']),esc(r['category']),esc(r['unit']),money(r['branch_sell_price'])+' / '+money(r.get('branch_wholesale_price') or r['branch_sell_price']),r['branch_qty'],r['branch_reorder'],'ACTIVE' if r['active'] else 'ARCHIVED'] for r in rows])
-        extra=f'<section class="card" style="margin-top:14px"><div class="notice">Sales Person can register products with separate retail and wholesale prices. Product catalogue entries are shared, but stock, costs and prices remain branch-specific; existing branch prices and costs can only be changed by the Administrator.</div>{table}</section>'
-        title='Product Registration'; subtitle='Sales Person product registration access'
+        extra=f'<section class="card" style="margin-top:14px"><div class="notice">Management and Sales Person can register products with separate retail and wholesale prices. Product catalogue entries are shared, but stock, costs and prices remain branch-specific; existing branch prices and costs can only be changed by the Administrator.</div>{table}</section>'
+        title='Product Registration'; subtitle='Management and Sales Person product registration access'
     product_opening_opts=''.join(f'<option value="{r["id"]}">{esc(r["name"])} · {esc(r["sku"])}</option>' for r in rows if r['active'])
-    branch_opening_opts=('<option value="">Select branch</option>'+''.join(f'<option value="{b["id"]}" {"selected" if int(b["id"])==branch_id else ""}>{esc(b["name"])}</option>' for b in branches)) if role=='ADMIN' else f'<input type="hidden" name="branch_id" value="{branch_id}">'
-    branch_opening_field=f'<div><label>Branch</label><select name="branch_id" required>{branch_opening_opts}</select></div>' if role=='ADMIN' else branch_opening_opts
-    product_branch_field=f'<div><label>Opening Stock Branch *</label><select name="branch_id" required>{branch_opening_opts}</select></div>' if role=='ADMIN' else f'<input type="hidden" name="branch_id" value="{branch_id}">'
-    product_branch_selector=branch_scope_selector(u,{'branch_id':str(branch_id) if branch_id else ''},'/products') if role=='ADMIN' else ''
+    branch_opening_opts=('<option value="">Select branch</option>'+''.join(f'<option value="{b["id"]}" {"selected" if int(b["id"])==branch_id else ""}>{esc(b["name"])}</option>' for b in branches)) if role in ('ADMIN','MANAGEMENT') else f'<input type="hidden" name="branch_id" value="{branch_id}">'
+    branch_opening_field=f'<div><label>Branch</label><select name="branch_id" required>{branch_opening_opts}</select></div>' if role in ('ADMIN','MANAGEMENT') else branch_opening_opts
+    product_branch_field=f'<div><label>Opening Stock Branch *</label><select name="branch_id" required>{branch_opening_opts}</select></div>' if role in ('ADMIN','MANAGEMENT') else f'<input type="hidden" name="branch_id" value="{branch_id}">'
+    product_branch_selector=branch_scope_selector(u,{'branch_id':str(branch_id) if branch_id else ''},'/products') if role in ('ADMIN','MANAGEMENT') else ''
     opening_form=f'''<section class="card" style="margin-top:14px"><h3>Opening Stock — Existing Product in a Branch</h3><p class="muted">Enter the physically counted stock for a product in this branch once. The system will keep each branch balance separate.</p><form method="post" action="/products">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="opening"><div class="form-grid"><div><label>Product</label><select name="product_id" required>{product_opening_opts}</select></div>{branch_opening_field}<div><label>Physical Opening Quantity</label><input type="number" name="opening_qty" min="0.001" step="0.001" required></div><div><label>Unit Cost</label><input type="number" name="opening_cost" min="0.01" step="0.01" required></div><div><label>Reason / Stock Take Reference</label><input name="opening_reason" minlength="5" required placeholder="Physical opening stock count"></div></div><button class="btn gold" style="margin-top:12px">SAVE BRANCH OPENING STOCK</button></form></section>'''
     content=f'''{product_branch_selector}{notice}<section class="card"><div class="section-head"><h2>{esc(title)}</h2><span class="pill">{esc(u['full_name'])} · {esc(role_display(role))}</span></div><form method="post" action="/products"><div class="form-grid">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="create">{product_branch_field}<div><label>SKU *</label><div class="scan-inline"><div><input name="sku" id="product_sku" required></div><button type="button" class="btn scan-btn" onclick="openScannerFill('product_sku')">SCAN</button></div></div><div><label>Product Name *</label><input name="name" required></div><div><label>Category *</label><input name="category" placeholder="Wine, Spirit, Beer..." required></div><div><label>Unit</label><input name="unit" value="{esc(core.get_setting('default_unit','bottle'))}" required></div><div><label>Retail Selling Price</label><input type="number" name="sell_price" min="0.01" step="0.01" required></div><div><label>Wholesale Selling Price</label><input type="number" name="wholesale_price" min="0.01" step="0.01" required><small class="muted">Catalogue is shared; stock quantity is recorded only in the selected branch.</small></div><div><label>Opening Stock</label><input type="number" name="stock_qty" min="0" step="1" required></div><div><label>COGS / Unit Cost (KSh) — Cost of Goods Sold *</label><input type="number" name="cogs_unit_cost" min="0" step="0.01" value="0" required><small class="muted">Enter the cost you pay per unit. Required to calculate accurate profit and COGS.</small></div><div><label>Reorder Level</label><input type="number" name="reorder_level" min="0" step="1" value="{esc(core.get_setting('default_reorder_level','5'))}" required></div></div><div class="actions" style="margin-top:14px"><button class="btn gold" type="submit">SAVE PRODUCT</button></div></form></section>{opening_form}{extra}'''
     return layout(u,title,content,'/products',subtitle)
@@ -1553,7 +1553,7 @@ def settings_page(u, message=''):
     role_rows=[]
     for d in payload['definitions']:
         k=d['key']; m='checked' if payload['roles']['MANAGEMENT'].get(k) else ''; sa='checked' if payload['roles']['SALES'].get(k) else ''
-        management_locked=k in core.MANAGEMENT_UNSUPPORTED_PERMISSION_KEYS or k in core.ADMIN_ONLY_PERMISSION_KEYS
+        management_locked=k in core.ADMIN_ONLY_PERMISSION_KEYS
         sales_locked=k in core.ADMIN_ONLY_PERMISSION_KEYS
         management_lock_attr='disabled title="Not available to Management"' if management_locked else ''
         sales_lock_attr='disabled title="Administrator only"' if sales_locked else ''
@@ -2693,7 +2693,7 @@ class Handler(BaseHTTPRequestHandler):
                     return redirect(self,'/stock-transfers?branch_id='+str(form.get('branch_id') or form.get('source_branch_id') or ''))
                 except Exception as e: return send_html(self,stock_transfers_page(u,query={'branch_id':str(form.get('branch_id') or form.get('source_branch_id') or '')},message=str(e)),400)
             if path=='/products':
-                if role_name(u) not in ('ADMIN','SALES') or not allowed(u,'MANAGE_PRODUCTS'): raise PermissionError('Product Registration is disabled for your account. Contact Administrator.')
+                if role_name(u) not in ('ADMIN','MANAGEMENT','SALES') or not allowed(u,'MANAGE_PRODUCTS'): raise PermissionError('Product Registration is disabled for your account. Contact Administrator.')
                 try:
                     action=form.get('action','create')
                     if action=='create':
