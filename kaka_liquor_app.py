@@ -2238,7 +2238,7 @@ def _financial_account_events(account, end, branch_id=None, conn=None):
     # Exclude events beyond the requested statement end and sort chronologically for a running balance.
     for e in events:
         raw_ts=str(e.get('ts') or '')
-        if re.fullmatch(r'\\d{14}',raw_ts):
+        if re.fullmatch(r'\d{14}',raw_ts):
             try: e['ts']=dt.datetime.strptime(raw_ts,'%Y%m%d%H%M%S').strftime('%Y-%m-%d %H:%M:%S')
             except ValueError: pass
     events=[e for e in events if str(e.get('ts') or '')<=end]
