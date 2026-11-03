@@ -76,6 +76,7 @@ class DB:
         CREATE TABLE IF NOT EXISTS credit_accounts(id INTEGER PRIMARY KEY AUTOINCREMENT,sale_id INTEGER UNIQUE NOT NULL REFERENCES sales(id) ON DELETE CASCADE,customer_id INTEGER NOT NULL REFERENCES customers(id),principal REAL NOT NULL,due_date TEXT NOT NULL,collateral TEXT NOT NULL,collateral_value REAL NOT NULL DEFAULT 0,paid_amount REAL NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'OPEN',created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS credit_payments(id INTEGER PRIMARY KEY AUTOINCREMENT,credit_id INTEGER NOT NULL REFERENCES credit_accounts(id) ON DELETE CASCADE,payment_date TEXT NOT NULL,user_id INTEGER NOT NULL REFERENCES users(id),amount REAL NOT NULL,payment_method TEXT NOT NULL CHECK(payment_method IN ('CASH','MPESA')),mpesa_code TEXT,reference TEXT);
         CREATE UNIQUE INDEX IF NOT EXISTS ux_credit_mpesa ON credit_payments(UPPER(mpesa_code)) WHERE mpesa_code IS NOT NULL AND mpesa_code<>'';
+        CREATE TABLE IF NOT EXISTS suppliers(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL COLLATE NOCASE UNIQUE,contact_person TEXT NOT NULL DEFAULT '',phone TEXT NOT NULL DEFAULT '',email TEXT NOT NULL DEFAULT '',address TEXT NOT NULL DEFAULT '',notes TEXT NOT NULL DEFAULT '',active INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS purchases(id INTEGER PRIMARY KEY AUTOINCREMENT,purchase_no TEXT UNIQUE NOT NULL,purchased_at TEXT NOT NULL,user_id INTEGER NOT NULL REFERENCES users(id),supplier TEXT NOT NULL,payment_method TEXT NOT NULL,total REAL NOT NULL,reference TEXT);
         CREATE TABLE IF NOT EXISTS purchase_lines(id INTEGER PRIMARY KEY AUTOINCREMENT,purchase_id INTEGER NOT NULL REFERENCES purchases(id) ON DELETE CASCADE,product_id INTEGER NOT NULL REFERENCES products(id),qty REAL NOT NULL,unit_cost REAL NOT NULL,total REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS expenses(id INTEGER PRIMARY KEY AUTOINCREMENT,expense_no TEXT UNIQUE NOT NULL,expense_date TEXT NOT NULL,user_id INTEGER NOT NULL REFERENCES users(id),category TEXT NOT NULL,description TEXT NOT NULL,amount REAL NOT NULL,payment_method TEXT NOT NULL,reference TEXT);
@@ -98,6 +99,9 @@ class DB:
         # Branch stock isolation: stock balances are stored per branch/product. Legacy shared
         # products.stock_qty is deliberately NOT copied into branches; opening stock must be
         # physically verified and entered for each registered branch by an authorised user.
+        # Import historical supplier names into the reusable supplier register.
+        for old_supplier in c.execute("SELECT DISTINCT trim(supplier) supplier FROM purchases WHERE trim(COALESCE(supplier,''))<>''").fetchall():
+            c.execute('INSERT OR IGNORE INTO suppliers(name,created_at,updated_at) VALUES(?,?,?)',(old_supplier['supplier'],now_str(),now_str()))
         purchase_cols={r['name'] for r in c.execute('PRAGMA table_info(purchases)').fetchall()}
         if 'branch_id' not in purchase_cols: c.execute('ALTER TABLE purchases ADD COLUMN branch_id INTEGER REFERENCES branches(id)')
         movement_cols={r['name'] for r in c.execute('PRAGMA table_info(stock_movements)').fetchall()}
@@ -728,7 +732,7 @@ def stock_report(start,end,branch_id=None):
         opening=float(opening_net or 0); closing=opening+float(pur or 0)-float(sold or 0)+float(adjustments or 0)
         current_qty=float(p['branch_stock_qty'] or 0)
         unit_cost=float(p['branch_cost'] or 0)
-        out.append({'sku':p['sku'],'name':p['name'],'category':p['category'],'stock':current_qty,'opening':opening,'purchased':pur,'sold':sold,'adjustments':float(adjustments or 0),'closing':closing,'sell_price':p['branch_sell_price'],'retail_price':p['branch_sell_price'],'wholesale_price':p['branch_wholesale_price'],'avg_cost':unit_cost,'stock_value':current_qty*unit_cost,'retail_units':float(split['retail_units'] or 0),'wholesale_units':float(split['wholesale_units'] or 0),'retail_revenue':float(split['retail_revenue'] or 0),'wholesale_revenue':float(split['wholesale_revenue'] or 0),'reorder_level':p['branch_reorder_level'],'status':'OUT OF STOCK' if closing<=0 else ('LOW STOCK' if closing<=p['branch_reorder_level'] else 'OK')})
+        out.append({'name':p['name'],'category':p['category'],'stock':current_qty,'opening':opening,'purchased':pur,'sold':sold,'adjustments':float(adjustments or 0),'closing':closing,'sell_price':p['branch_sell_price'],'retail_price':p['branch_sell_price'],'wholesale_price':p['branch_wholesale_price'],'avg_cost':unit_cost,'stock_value':current_qty*unit_cost,'retail_units':float(split['retail_units'] or 0),'wholesale_units':float(split['wholesale_units'] or 0),'retail_revenue':float(split['retail_revenue'] or 0),'wholesale_revenue':float(split['wholesale_revenue'] or 0),'reorder_level':p['branch_reorder_level'],'status':'OUT OF STOCK' if closing<=0 else ('LOW STOCK' if closing<=p['branch_reorder_level'] else 'OK')})
     for r in out:
         unit_total=r['retail_units']+r['wholesale_units']; rev_total=r['retail_revenue']+r['wholesale_revenue']
         r['retail_units_pct']=100*r['retail_units']/unit_total if unit_total else 0

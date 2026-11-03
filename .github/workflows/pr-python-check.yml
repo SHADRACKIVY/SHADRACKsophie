@@ -73,6 +73,13 @@ jobs:
           assert core.effective_permissions(manager)["MANAGE_PRODUCTS"] is True
           app.CURRENT_HANDLER=type("FakeHandler",(),{"headers":{}})()
           assert "SAVE PRODUCT" in app.products_page(manager,query={"branch_id":str(bid)})
+          assert "SKU" not in app.products_page(manager,query={"branch_id":str(bid)})
+          c=core.db.c()
+          c.execute("INSERT INTO suppliers(name,created_at,updated_at) VALUES(?,?,?)",("CI Test Supplier",core.now_str(),core.now_str()))
+          c.commit(); c.close()
+          assert "CI Test Supplier" in app.purchase_page(admin,query={"branch_id":str(bid)})
+          assert "Search Product" in app.purchase_page(admin,query={"branch_id":str(bid)})
+          assert "Supplier Register" in app.suppliers_page(admin)
           assert core.effective_permissions(manager)["VIEW_REPORTS"] is False
           assert core.effective_permissions(manager)["MANAGE_SETTINGS"] is False
           assert core.effective_permissions(sales)["CREATE_SALE"] is True

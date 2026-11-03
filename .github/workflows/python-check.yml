@@ -43,6 +43,9 @@ jobs:
           q2 = c.execute("SELECT qty FROM branch_stock WHERE branch_id=? AND product_id=?",(b2,p)).fetchone()["qty"]
           assert (q1,q2)==(100,70), (q1,q2)
           c.close()
+          c = core.db.c()
+          c.execute("INSERT INTO suppliers(name,created_at,updated_at) VALUES(?,?,?)",("Test Supplier",ts,ts))
+          c.commit(); c.close()
           save_purchase(user, {"supplier":"Test Supplier","payment_method":"Cash","product_id":str(p),"qty":"5","unit_cost":"7"})
           c = core.db.c()
           q1 = c.execute("SELECT qty FROM branch_stock WHERE branch_id=? AND product_id=?",(b1,p)).fetchone()["qty"]
@@ -50,7 +53,7 @@ jobs:
           assert (q1,q2)==(100,75), (q1,q2)
           c.close()
           report = core.stock_report("1900-01-01 00:00:00","2999-12-31 23:59:59",b2)
-          product_row = next(row for row in report if row["sku"]=="TEST-001")
+          product_row = next(row for row in report if row["name"]=="Test Product")
           assert (product_row["opening"],product_row["purchased"],product_row["sold"],product_row["closing"]) == (80,5,10,75), product_row
           today = core.now().strftime("%Y-%m-%d")
           dash = core.dashboard(b2)
@@ -114,7 +117,7 @@ jobs:
           c.close()
           assert (q1,q2)==(110,60), (q1,q2)
           report = core.stock_report("1900-01-01 00:00:00","2999-12-31 23:59:59",b2)
-          product_row = next(row for row in report if row["sku"]=="TEST-001")
+          product_row = next(row for row in report if row["name"]=="Test Product")
           assert (product_row["opening"],product_row["purchased"],product_row["sold"],product_row["adjustments"],product_row["closing"]) == (80,5,10,-15,60), product_row
           print("PASS: Branch isolation, opening/purchase/sale/closing reconciliation, COGS/gross profit, transfers, stock counts, settings persistence, permission profiles, role changes and permanent branch assignment.")
           PY
