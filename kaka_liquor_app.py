@@ -400,24 +400,32 @@ def save_purchase(u, form):
     c=core.db.c()
     try:
         c.execute('BEGIN IMMEDIATE')
+        branch_id=u.get('branch_id') or int(form.get('branch_id') or 0)
+        if not branch_id:
+            br=c.execute('SELECT id FROM branches WHERE active=1 ORDER BY id LIMIT 1').fetchone()
+            if not br: raise ValueError('Register an active branch before recording purchases.')
+            branch_id=br['id']
+        if not c.execute('SELECT 1 FROM branches WHERE id=? AND active=1',(branch_id,)).fetchone(): raise ValueError('Selected branch is inactive or unavailable.')
         products={}
         for product_id,qty,cost,line_total in clean:
             p=c.execute('SELECT * FROM products WHERE id=? AND active=1',(product_id,)).fetchone()
             if not p:
                 raise ValueError(f'Product #{product_id} was not found or is inactive.')
+            c.execute('INSERT OR IGNORE INTO branch_stock(branch_id,product_id,qty,avg_cost,buy_price,sell_price,wholesale_price,reorder_level,updated_at) VALUES(?,?,0,?,?,?,?,?,?,?)',(branch_id,product_id,float(p['avg_cost'] or 0),float(p['avg_cost'] or 0),float(p['sell_price'] or 0),float(p['wholesale_price'] or p['sell_price'] or 0),float(p['reorder_level'] or 0),now()))
             products[product_id]=p
         ts=now()
         no='PUR-'+dt.datetime.now().strftime('%Y%m%d%H%M%S')+'-'+secrets.token_hex(2).upper()
-        cur=c.execute('INSERT INTO purchases(purchase_no,purchased_at,user_id,supplier,payment_method,total,reference) VALUES(?,?,?,?,?,?,?)',(no,ts,u['id'],supplier,method,total,ref))
+        cur=c.execute('INSERT INTO purchases(purchase_no,purchased_at,user_id,supplier,payment_method,total,reference,branch_id) VALUES(?,?,?,?,?,?,?,?)',(no,ts,u['id'],supplier,method,total,ref,branch_id))
         pid=cur.lastrowid
         # Apply every line in one database transaction. Repeated products are handled sequentially.
         for product_id,qty,cost,line_total in clean:
             p=c.execute('SELECT * FROM products WHERE id=? AND active=1',(product_id,)).fetchone()
-            old=float(p['stock_qty']); new=old+qty
-            avg=((old*float(p['avg_cost'])+(qty*cost))/new) if new else cost
+            bs=c.execute('SELECT * FROM branch_stock WHERE branch_id=? AND product_id=?',(branch_id,product_id)).fetchone()
+            old=float(bs['qty']); new=old+qty
+            avg=((old*float(bs['avg_cost'])+(qty*cost))/new) if new else cost
             c.execute('INSERT INTO purchase_lines(purchase_id,product_id,qty,unit_cost,total) VALUES(?,?,?,?,?)',(pid,product_id,qty,cost,line_total))
-            c.execute('UPDATE products SET stock_qty=?,avg_cost=?,updated_at=? WHERE id=?',(new,avg,ts,product_id))
-            c.execute('INSERT INTO stock_movements(movement_time,user_id,product_id,movement_type,qty,before_qty,after_qty,unit_cost,reference) VALUES(?,?,?,?,?,?,?,?,?)',(ts,u['id'],product_id,'PURCHASE',qty,old,new,cost,no))
+            c.execute('UPDATE branch_stock SET qty=?,avg_cost=?,buy_price=?,updated_at=? WHERE branch_id=? AND product_id=?',(new,avg,cost,ts,branch_id,product_id))
+            c.execute('INSERT INTO stock_movements(movement_time,user_id,product_id,movement_type,qty,before_qty,after_qty,unit_cost,reference,branch_id) VALUES(?,?,?,?,?,?,?,?,?,?)',(ts,u['id'],product_id,'PURCHASE',qty,old,new,cost,no,branch_id))
         core.db.audit(c,u,'CREATE','PURCHASE',pid,f'{no} lines={len(clean)} total={total:.2f}')
         c.commit()
         return no,total
@@ -471,10 +479,17 @@ def save_product(u, form):
     c=core.db.c(); c.execute('BEGIN')
     try:
         ts=now(); avg_cost=opening_cost
-        cur=c.execute('INSERT INTO products(product_no,sku,name,category,unit,sell_price,wholesale_price,avg_cost,stock_qty,reorder_level,active,created_at,updated_at) VALUES(NULL,?,?,?,?,?,?,?,?,?,1,?,?)',(sku,name,cat,unit,sell,wholesale,avg_cost,stock,reorder,ts,ts)); pid=cur.lastrowid; product_no=f'PRD-{pid:05d}'
+        cur=c.execute('INSERT INTO products(product_no,sku,name,category,unit,sell_price,wholesale_price,avg_cost,stock_qty,reorder_level,active,created_at,updated_at) VALUES(NULL,?,?,?,?,?,?,?,?,?,1,?,?)',(sku,name,cat,unit,sell,wholesale,avg_cost,0,reorder,ts,ts)); pid=cur.lastrowid; product_no=f'PRD-{pid:05d}'
         c.execute('UPDATE products SET product_no=? WHERE id=?',(product_no,pid))
+        branch_id=u.get('branch_id') or int(form.get('branch_id') or 0)
+        if not branch_id:
+            br=c.execute('SELECT id FROM branches WHERE active=1 ORDER BY id LIMIT 1').fetchone()
+            if not br: raise ValueError('Register an active branch before entering opening stock.')
+            branch_id=br['id']
+        if not c.execute('SELECT 1 FROM branches WHERE id=? AND active=1',(branch_id,)).fetchone(): raise ValueError('Selected branch is inactive or unavailable.')
+        c.execute('INSERT INTO branch_stock(branch_id,product_id,qty,avg_cost,buy_price,sell_price,wholesale_price,reorder_level,updated_at) VALUES(?,?,?,?,?,?,?,?,?)',(branch_id,pid,stock,avg_cost,opening_cost,sell,wholesale,reorder,ts))
         if stock>0:
-            c.execute('INSERT INTO stock_movements(movement_time,user_id,product_id,movement_type,qty,before_qty,after_qty,unit_cost,reference) VALUES(?,?,?,?,?,?,?,?,?)',(ts,u['id'],pid,'OPENING_STOCK',stock,0,stock,opening_cost,product_no))
+            c.execute('INSERT INTO stock_movements(movement_time,user_id,product_id,movement_type,qty,before_qty,after_qty,unit_cost,reference,branch_id) VALUES(?,?,?,?,?,?,?,?,?,?)',(ts,u['id'],pid,'OPENING_STOCK',stock,0,stock,opening_cost,product_no,branch_id))
         core.db.audit(c,u,'CREATE','PRODUCT',pid,f'{product_no} {name}; opening_stock={stock:g}; retail_price={sell:.2f}; wholesale_price={wholesale:.2f}; cogs_unit_cost={opening_cost:.2f}'); c.commit(); return pid,product_no
     except Exception:
         c.rollback(); raise
@@ -546,8 +561,13 @@ def admin_set_stock(u, form):
     try:
         c.execute('BEGIN IMMEDIATE'); p=c.execute('SELECT * FROM products WHERE id=?',(pid,)).fetchone()
         if not p: raise ValueError('Product not found.')
-        before=float(p['stock_qty']); after=float(new_qty); ts=now(); delta=after-before
-        c.execute('UPDATE products SET stock_qty=?,updated_at=? WHERE id=?',(after,ts,pid)); c.execute('INSERT INTO stock_movements(movement_time,user_id,product_id,movement_type,qty,before_qty,after_qty,unit_cost,reference) VALUES(?,?,?,?,?,?,?,?,?)',(ts,u['id'],pid,'ADMIN_ADJUSTMENT',delta,before,after,p['avg_cost'],reason)); core.db.audit(c,u,'UPDATE','STOCK',pid,f'{p["product_no"]} {before:g} -> {after:g}; {reason}'); c.commit()
+        branch_id=u.get('branch_id') or int(form.get('branch_id') or 0)
+        if not branch_id:
+            br=c.execute('SELECT id FROM branches WHERE active=1 ORDER BY id LIMIT 1').fetchone(); branch_id=br['id'] if br else None
+        bs=c.execute('SELECT * FROM branch_stock WHERE branch_id=? AND product_id=?',(branch_id,pid)).fetchone()
+        if not bs: raise ValueError('No stock record exists for this product in the selected branch. Register or initialise the product first.')
+        before=float(bs['qty']); after=float(new_qty); ts=now(); delta=after-before
+        c.execute('UPDATE branch_stock SET qty=?,updated_at=? WHERE branch_id=? AND product_id=?',(after,ts,branch_id,pid)); c.execute('INSERT INTO stock_movements(movement_time,user_id,product_id,movement_type,qty,before_qty,after_qty,unit_cost,reference,branch_id) VALUES(?,?,?,?,?,?,?,?,?,?)',(ts,u['id'],pid,'ADMIN_ADJUSTMENT',delta,before,after,bs['avg_cost'],reason,branch_id)); core.db.audit(c,u,'UPDATE','STOCK',pid,f'{p["product_no"]} branch={branch_id} {before:g} -> {after:g}; {reason}'); c.commit()
     except Exception:
         c.rollback(); raise
     finally: c.close()
