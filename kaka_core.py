@@ -97,6 +97,8 @@ class DB:
         CREATE TABLE IF NOT EXISTS financial_manual_entries(id INTEGER PRIMARY KEY AUTOINCREMENT,account TEXT NOT NULL CHECK(account IN ('CASH','PAYBILL')),branch_id INTEGER REFERENCES branches(id),direction TEXT NOT NULL CHECK(direction IN ('IN','OUT')),amount REAL NOT NULL CHECK(amount>0),reference TEXT NOT NULL,description TEXT NOT NULL,occurred_at TEXT NOT NULL,created_at TEXT NOT NULL,created_by INTEGER NOT NULL REFERENCES users(id),UNIQUE(account,reference));
         CREATE INDEX IF NOT EXISTS idx_financial_transfers_branch_date ON financial_transfers(branch_id,created_at);
         ''')
+        mpesa_tx_cols={r['name'] for r in c.execute('PRAGMA table_info(mpesa_transactions)').fetchall()}
+        if 'branch_id' not in mpesa_tx_cols: c.execute('ALTER TABLE mpesa_transactions ADD COLUMN branch_id INTEGER REFERENCES branches(id)')
         # Branch stock isolation: stock balances are stored per branch/product. Legacy shared
         # products.stock_qty is deliberately NOT copied into branches; opening stock must be
         # physically verified and entered for each registered branch by an authorised user.
