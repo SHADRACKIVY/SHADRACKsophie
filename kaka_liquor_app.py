@@ -3695,6 +3695,18 @@ def do_POST(self):
                 return send_json(self,mpesa_stk_request(u,form.get('amount','0'),form.get('phone',''),payload,int(form.get('sequence_no','1') or 1)))
             except Exception as e:
                 return send_json(self,{'error':str(e)},400)
+        branch_mpesa_action=re.fullmatch(r'/api/mpesa/branch/(\d+)/(test|register-c2b)',path)
+        if branch_mpesa_action:
+            try:
+                if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
+                bid=int(branch_mpesa_action.group(1)); cfg=get_branch_mpesa_config(bid)
+                if branch_mpesa_action.group(2)=='test':
+                    mpesa.get_access_token(core,cfg)
+                    return send_json(self,{'message':'Branch M-Pesa Daraja authentication successful.'})
+                result=mpesa.register_c2b_urls(core,cfg,bid)
+                return send_json(self,{'message':'Branch-specific C2B confirmation and validation URLs registered with Safaricom.','result':result})
+            except Exception as e:
+                return send_json(self,{'error':str(e)},400)
         if path=='/api/mpesa/test-connection':
             try: return send_json(self,mpesa_test_connection(u))
             except Exception as e: return send_json(self,{'error':str(e)},400)
