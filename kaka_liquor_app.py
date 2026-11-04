@@ -1722,6 +1722,26 @@ def branch_performance_page(u, query=None):
     return layout(u,'Branch Performance',content,'/branch-performance','Best and lowest performing branches and sales staff')
 
 
+def get_branch_mpesa_config(branch_id):
+    c=core.db.c()
+    try:
+        row=c.execute("SELECT * FROM branch_mpesa_settings WHERE branch_id=?",(int(branch_id),)).fetchone()
+        if not row: raise mpesa.MpesaError('This branch has no M-Pesa integration configured. Ask Administrator to configure its own Till/Paybill in Settings.')
+        cfg=dict(row)
+    finally:
+        c.close()
+    if str(cfg.get('enabled','NO')).upper()!='YES':
+        raise mpesa.MpesaError('M-Pesa integration is disabled for this branch.')
+    return {
+        'mpesa_environment':cfg['environment'],'mpesa_shortcode':cfg['shortcode'],
+        'mpesa_shortcode_type':cfg['shortcode_type'],'mpesa_consumer_key':cfg['consumer_key'],
+        'mpesa_consumer_secret':cfg['consumer_secret'],'mpesa_passkey':cfg['passkey'],
+        'mpesa_callback_base_url':cfg['callback_base_url'],
+        'mpesa_account_reference_prefix':cfg['account_reference_prefix'],
+        'mpesa_transaction_desc':cfg['transaction_desc']
+    }
+
+
 def branch_mpesa_settings_html(u):
     """Administrator-only, isolated Daraja credentials for each active business branch."""
     c=core.db.c()
@@ -2035,13 +2055,13 @@ def mpesa_test_connection(u):
 
 def mpesa_stk_request(u, amount, phone, batch_payload=None, sequence_no=1):
     require_perm_user(u,'CREATE_SALE')
-    if core.get_setting('mpesa_enabled','NO')!='YES': raise mpesa.MpesaError('M-Pesa integration is disabled in Administrator Settings.')
     amt=float(amount); phone_n=mpesa.normalize_phone(phone)
     if amt<=0: raise mpesa.MpesaError('Payment amount must be greater than zero.')
     if abs(amt-round(amt))>0.009: raise mpesa.MpesaError('M-Pesa STK amounts must be whole Kenyan shillings. Use a whole-shilling split or direct Till/Paybill payment.')
     c=core.db.c(); ts=core.now_str(); batch_id=None
     role=role_name(u); branch_id=int((batch_payload or {}).get('branch_id','0') or 0) if role in ('ADMIN','MANAGEMENT') else int(u.get('branch_id') or 0)
     if not branch_id: c.close(); raise mpesa.MpesaError('Select an active branch before requesting an M-Pesa prompt.')
+    branch_mpesa_config=get_branch_mpesa_config(branch_id)
     try:
         if not c.execute('SELECT 1 FROM branches WHERE id=? AND active=1',(branch_id,)).fetchone(): raise mpesa.MpesaError('Selected branch is inactive or unavailable.')
         # First STK request can create the pending M-Pesa-only sale batch.
@@ -2064,8 +2084,8 @@ def mpesa_stk_request(u, amount, phone, batch_payload=None, sequence_no=1):
                 for j in range(1,n+1):
                     amt_j=float(batch_payload.get(f'payment_amount_{j}',0) or 0)
                     c.execute('INSERT INTO pending_payment_allocations(batch_id,sequence_no,amount,payment_method,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?)',(batch_id,j,amt_j,'MPESA','PENDING',ts,ts))
-        client_ref='K'+secrets.token_hex(6).upper(); account_ref=(core.get_setting('mpesa_account_reference_prefix','MONTEZ')+client_ref)[-12:]
-        data=mpesa.stk_push(core,amt,phone_n,account_ref,core.get_setting('mpesa_transaction_desc','MONTEZ LIQUOR'))
+        client_ref='K'+secrets.token_hex(6).upper(); account_ref=(branch_mpesa_config.get('mpesa_account_reference_prefix','MONTEZ')+client_ref)[-12:]
+        data=mpesa.stk_push(core,amt,phone_n,account_ref,branch_mpesa_config.get('mpesa_transaction_desc','MONTEZ LIQUOR'),config=branch_mpesa_config,branch_id=branch_id)
         checkout=data.get('CheckoutRequestID'); merchant=data.get('MerchantRequestID')
         if not checkout: raise mpesa.MpesaError(data.get('ResponseDescription') or data.get('errorMessage') or 'No CheckoutRequestID returned by M-Pesa.')
         c.execute('INSERT INTO mpesa_stk_requests(created_at,user_id,checkout_request_id,merchant_request_id,client_ref,amount,phone,status,raw_response,updated_at,branch_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(ts,u['id'],checkout,merchant,client_ref,amt,phone_n,'PENDING',json.dumps(data,ensure_ascii=False),ts,branch_id))
