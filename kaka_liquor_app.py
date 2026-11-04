@@ -302,14 +302,14 @@ var promptEvent=null;
 function btn(){return document.getElementById('install-app-btn');}
 function note(t){var e=document.getElementById('install-help');if(e)e.textContent=t;}
 function isInstalled(){return matchMedia('(display-mode: standalone)').matches||navigator.standalone===true;}
-function refresh(){var b=btn();if(b&&isInstalled()){b.textContent='APP INSTALLED';b.disabled=true;}}
+function refresh(){var b=btn();if(b&&isInstalled()){b.hidden=true;b.setAttribute('aria-hidden','true');b.disabled=true;note('');}}
 addEventListener('beforeinstallprompt',function(e){e.preventDefault();promptEvent=e;});
-addEventListener('appinstalled',function(){promptEvent=null;refresh();note('MONTEZ LIQUOR is installed on this device.');});
+addEventListener('appinstalled',function(){promptEvent=null;refresh();});
 document.addEventListener('DOMContentLoaded',function(){
 if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js',{scope:'/'}).catch(function(e){console.warn('Service worker registration failed',e);});}
-refresh();var b=btn();if(!b)return;
+refresh();var b=btn();if(!b||isInstalled())return;
 b.addEventListener('click',async function(){
-if(isInstalled()){note('MONTEZ is already installed.');return;}
+if(isInstalled()){refresh();return;}
 if(promptEvent){promptEvent.prompt();try{var result=await promptEvent.userChoice;note(result.outcome==='accepted'?'Installing MONTEZ LIQUOR…':'Installation was cancelled.');}catch(e){}promptEvent=null;return;}
 var ua=navigator.userAgent||'';
 if(/iphone|ipad|ipod/i.test(ua)){note('In Safari, tap Share, choose Add to Home Screen, then tap Add.');}
