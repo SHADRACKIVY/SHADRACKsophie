@@ -3653,7 +3653,7 @@ def do_POST(self):
         except Exception as e:
             return send_json(self, {'error':str(e) or 'Unable to update credit payment. Please check the invoice before retrying.'}, 500)
     try:
-        branch_callback=re.fullmatch(r'/api/mpesa/branch/(\\d+)/(stk/callback|c2b/confirmation|c2b/validation)',path)
+        branch_callback=re.fullmatch(r'/api/mpesa/branch/(\d+)/(stk/callback|c2b/confirmation|c2b/validation)',path)
         if path in ('/api/mpesa/stk/callback','/api/mpesa/c2b/confirmation','/api/mpesa/c2b/validation') or branch_callback:
             payload=core.json_body(self)
             if branch_callback:
