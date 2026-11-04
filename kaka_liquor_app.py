@@ -3,7 +3,7 @@
 Zero-third-party-dependency web application.
 Uses Python standard library + SQLite; core business logic is reused from the tested core.
 """
-import os, io, json, time, secrets, socket, datetime as dt, html, re, zipfile, mimetypes, traceback, sqlite3
+import os, io, json, time, secrets, socket, datetime as dt, html, re, zipfile, mimetypes, traceback, sqlite3, threading, hashlib
 from email import policy
 from email.parser import BytesParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1772,10 +1772,78 @@ def backup_readiness(counts):
     return login_count > 0 and business_count > 0, login_count, business_count
 
 
+_AUTO_BACKUP_LOCK = threading.Lock()
+_AUTO_BACKUP_INTERVAL_SECONDS = 6 * 60 * 60
+_AUTO_BACKUP_KEEP = 60
+
+def create_automatic_backup():
+    """Create a consistent, verified SQLite snapshot on the persistent data disk."""
+    backup_dir=os.path.join(DATA_DIR,'backups'); os.makedirs(backup_dir,exist_ok=True)
+    stamp=dt.datetime.now().strftime('%Y%m%d_%H%M%S')
+    filename=f'MONTEZ_AUTO_BACKUP_{stamp}.db'
+    destination=os.path.join(backup_dir,filename)
+    if not _AUTO_BACKUP_LOCK.acquire(blocking=False):
+        return None
+    source=target=snapshot=None
+    try:
+        source=sqlite3.connect(core.DB_PATH,timeout=60)
+        target=sqlite3.connect(destination,timeout=60)
+        source.backup(target,pages=256,sleep=0.1)
+        target.commit(); target.close(); target=None
+        source.close(); source=None
+        snapshot=sqlite3.connect(destination,timeout=60)
+        integrity=snapshot.execute('PRAGMA integrity_check').fetchone()
+        if not integrity or integrity[0] != 'ok':
+            raise RuntimeError('Automatic backup failed SQLite integrity verification.')
+        counts=backup_inventory(snapshot)
+        login_count=int(counts.get('users',0))
+        business_count=sum(int(counts.get(k,0)) for k in ('products','sales','purchases','expenses','credit_payments','mpesa_transactions','stock_transfers'))
+        snapshot.execute('''CREATE TABLE IF NOT EXISTS backup_manifest(
+            id INTEGER PRIMARY KEY CHECK(id=1), app_name TEXT NOT NULL, created_at TEXT NOT NULL,
+            login_accounts INTEGER NOT NULL, business_activity_rows INTEGER NOT NULL,
+            row_counts_json TEXT NOT NULL, integrity_check TEXT NOT NULL)''')
+        snapshot.execute('''INSERT OR REPLACE INTO backup_manifest
+            (id,app_name,created_at,login_accounts,business_activity_rows,row_counts_json,integrity_check)
+            VALUES(1,?,?,?,?,?,?)''',(APP_NAME,now(),login_count,business_count,json.dumps(counts,sort_keys=True),'ok'))
+        snapshot.commit()
+        if snapshot.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
+            raise RuntimeError('Automatic backup manifest verification failed.')
+        snapshot.close(); snapshot=None
+        if os.path.getsize(destination) < 100:
+            raise RuntimeError('Automatic backup file is unexpectedly small.')
+        # Keep the newest 60 verified automatic snapshots; never remove manual/pre-migration backups.
+        automatic=sorted((f for f in os.listdir(backup_dir) if f.startswith('MONTEZ_AUTO_BACKUP_') and f.endswith('.db')),reverse=True)
+        for old in automatic[_AUTO_BACKUP_KEEP:]:
+            try: os.remove(os.path.join(backup_dir,old))
+            except OSError: pass
+        return {'filename':filename,'bytes':os.path.getsize(destination),'logins':login_count,'business_rows':business_count,'counts':counts}
+    except Exception:
+        try:
+            if os.path.exists(destination): os.remove(destination)
+        except OSError: pass
+        raise
+    finally:
+        for connection in (snapshot,target,source):
+            try:
+                if connection: connection.close()
+            except Exception: pass
+        _AUTO_BACKUP_LOCK.release()
+
+def automatic_backup_worker():
+    """Take a startup snapshot, then repeat every six hours in Kenya local service time."""
+    while True:
+        try:
+            result=create_automatic_backup()
+            if result:
+                print(f"[MONTEZ BACKUP] Verified {result['filename']} ({result['bytes']} bytes; {result['logins']} logins; {result['business_rows']} business rows)",flush=True)
+        except Exception as exc:
+            print(f'[MONTEZ BACKUP ERROR] {type(exc).__name__}: {exc}',flush=True)
+        time.sleep(_AUTO_BACKUP_INTERVAL_SECONDS)
+
 def backup_page(u):
     if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
     backup_dir=os.path.join(DATA_DIR,'backups'); os.makedirs(backup_dir,exist_ok=True)
-    backups=sorted((f for f in os.listdir(backup_dir) if f.lower().endswith('.db')),reverse=True)
+    backups=sorted((f for f in os.listdir(backup_dir) if f.lower().endswith('.db')),reverse=True)\n    auto_backups=[f for f in backups if f.startswith('MONTEZ_AUTO_BACKUP_')]
     c=core.db.c()
     try:
         counts=backup_inventory(c)
@@ -1785,9 +1853,9 @@ def backup_page(u):
     status=('<div class="notice" style="margin-top:12px"><strong>BACKUP READY:</strong> login records and business records are present.</div>' if ready else '<div class="flash error" style="margin-top:12px"><strong>INCOMPLETE BUSINESS DATA:</strong> this database currently has no registered products or business transactions, or no login records. The system will not label an empty snapshot as a complete business backup. Register/import the real business data first.</div>')
     labels={'users':'Login accounts','branches':'Branches','products':'Products','branch_stock':'Branch stock balances','customers':'Customers','sales':'Sales','sale_lines':'Sale lines','sale_payments':'Sale payments','purchases':'Purchases','purchase_lines':'Purchase lines','expenses':'Expenses','credit_accounts':'Credit accounts','credit_payments':'Credit repayments','stock_movements':'Stock movements','stock_transfers':'Stock transfers','mpesa_transactions':'M-Pesa transactions','mpesa_stk_requests':'M-Pesa requests','settings':'Settings','audit_log':'Audit records'}
     count_rows=''.join(f'<tr><td>{esc(labels.get(k,k.replace("_"," ").title()))}</td><td style="text-align:right">{v:,}</td></tr>' for k,v in counts.items())
-    latest=f'<p class="muted">Latest saved backup: {esc(backups[0])}</p>' if backups else '<p class="muted">No saved backup yet.</p>'
+    latest=f'<p class="muted">Latest saved backup: {esc(backups[0])}</p>' if backups else '<p class="muted">No saved backup yet.</p>'\n    automatic_status=f'<p><b>Automatic protection:</b> {len(auto_backups)} dated snapshots retained (maximum {_AUTO_BACKUP_KEEP}); new verified snapshot every 6 hours.</p>'
     button=('<a class="btn gold" href="/backup/download">CREATE &amp; DOWNLOAD VERIFIED BACKUP</a>' if ready else '<button class="btn" type="button" disabled title="Add real business records first">BACKUP INCOMPLETE — ACTION REQUIRED</button>')
-    content=f'<section class="card"><h2>Database Backup &amp; Data Verification</h2><p>The system checks the live database before allowing a backup to be labelled complete. The downloaded SQLite file includes user accounts (including password hashes), roles, settings, branches, products, stock and all transaction tables.</p>{status}<div class="grid three" style="margin-top:12px"><div class="metric"><div class="muted">LOGIN ACCOUNTS</div><div class="v">{login_count:,}</div></div><div class="metric"><div class="muted">PRODUCTS</div><div class="v">{counts.get("products",0):,}</div></div><div class="metric"><div class="muted">BUSINESS ACTIVITY ROWS</div><div class="v">{business_count:,}</div></div></div><h3 style="margin-top:18px">Records included in the next backup</h3><table class="data-table"><thead><tr><th>Record Type</th><th style="text-align:right">Records found</th></tr></thead><tbody>{count_rows}</tbody></table><div class="actions" style="margin-top:14px">{button}</div>{latest}<p class="muted" style="margin-top:12px">Every backup is integrity-checked and carries an internal verification manifest with record counts. Passwords are preserved as secure hashes, never exported as readable passwords. Download the file and keep an additional copy outside Render. The current Render service uses temporary storage; deploys/restarts can erase files stored there until persistent storage is configured.</p></section>'
+    content=f'<section class="card"><h2>Database Backup &amp; Data Verification</h2><p>The system checks the live database before allowing a backup to be labelled complete. The downloaded SQLite file includes user accounts (including password hashes), roles, settings, branches, products, stock and all transaction tables.</p>{status}<div class="grid three" style="margin-top:12px"><div class="metric"><div class="muted">LOGIN ACCOUNTS</div><div class="v">{login_count:,}</div></div><div class="metric"><div class="muted">PRODUCTS</div><div class="v">{counts.get("products",0):,}</div></div><div class="metric"><div class="muted">BUSINESS ACTIVITY ROWS</div><div class="v">{business_count:,}</div></div></div><h3 style="margin-top:18px">Records included in the next backup</h3><table class="data-table"><thead><tr><th>Record Type</th><th style="text-align:right">Records found</th></tr></thead><tbody>{count_rows}</tbody></table><div class="actions" style="margin-top:14px">{button}</div>{latest}{automatic_status}<p class="muted" style="margin-top:12px">Every backup is integrity-checked and carries an internal verification manifest with record counts. Passwords are preserved as secure hashes, never exported as readable passwords. Download the file and keep an additional copy outside Render. Automatic snapshots are stored on the attached persistent disk at /var/data/backups and survive normal app deploys/restarts. This protects against application/container replacement, but a disk failure or account-level loss can still affect on-disk copies; download periodic copies to a separate computer or cloud storage.</p></section>'
     return layout(u,'Backup',content,'/backup')
 
 def audit_page(u):
@@ -3698,6 +3766,7 @@ self.addEventListener("fetch",event=>{const req=event.request;if(req.method!=="G
 '''
 
 if __name__=='__main__':
+    threading.Thread(target=automatic_backup_worker,name='montez-automatic-backup',daemon=True).start()
     print('='*60); print(APP_NAME); print('SERVER IS RUNNING'); print('='*60)
     print(f'Laptop: http://127.0.0.1:{PORT}'); print(f'Phone (same Wi-Fi): http://{ip_address()}:{PORT}'); print('='*60)
     ThreadingHTTPServer((HOST,PORT),Handler).serve_forever()
