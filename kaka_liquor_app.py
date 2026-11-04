@@ -2215,13 +2215,14 @@ def mpesa_receive_stk(payload):
     d['auto_saved']=bool(sale); d['sale_id']=sale['sale_id'] if sale else None; d['status']=status
     return d
 
-def mpesa_receive_c2b(payload):
+def mpesa_receive_c2b(payload, branch_id=None):
     d=mpesa.parse_c2b(payload); c=core.db.c(); status='UNMATCHED'; matched_sale_payment_id=None; matched_batch_id=None; sale=None
-    configured=str(core.get_setting('mpesa_shortcode','1546252')).strip() or '1546252'
+    branch_cfg=get_branch_mpesa_config(branch_id) if branch_id is not None else None
+    configured=str((branch_cfg or {}).get('mpesa_shortcode') or core.get_setting('mpesa_shortcode','1546252')).strip() or '1546252'
     if d['business_short_code'] and str(d['business_short_code'])!=configured:
         status='REJECTED_SHORTCODE'
     elif d['trans_id']:
-        c.execute('INSERT OR IGNORE INTO mpesa_transactions(received_at,transaction_type,trans_id,trans_time,amount,business_short_code,bill_ref_number,invoice_number,org_account_balance,msisdn,first_name,middle_name,last_name,raw_json,status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(core.now_str(),d['transaction_type'],d['trans_id'],d['trans_time'],d['amount'],d['business_short_code'],d['bill_ref_number'],d['invoice_number'],d['org_account_balance'],d['msisdn'],d['first_name'],d['middle_name'],d['last_name'],d['raw_json'],'UNMATCHED'))
+        c.execute('INSERT OR IGNORE INTO mpesa_transactions(received_at,transaction_type,trans_id,trans_time,amount,business_short_code,bill_ref_number,invoice_number,org_account_balance,msisdn,first_name,middle_name,last_name,raw_json,status,branch_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(core.now_str(),d['transaction_type'],d['trans_id'],d['trans_time'],d['amount'],d['business_short_code'],d['bill_ref_number'],d['invoice_number'],d['org_account_balance'],d['msisdn'],d['first_name'],d['middle_name'],d['last_name'],d['raw_json'],'UNMATCHED',branch_id))
         if d['msisdn'] and d['amount']>0:
             normalized_msisdn=''
             try:
@@ -2229,7 +2230,7 @@ def mpesa_receive_c2b(payload):
             except Exception:
                 normalized_msisdn=''
             if normalized_msisdn:
-                matches=c.execute('''SELECT ppa.id,ppa.batch_id FROM pending_payment_allocations ppa JOIN pending_payment_batches pb ON pb.id=ppa.batch_id WHERE ppa.status='PENDING' AND ppa.payment_method='MPESA' AND ABS(ppa.amount-?)<0.009 AND ppa.phone=? AND pb.status='PENDING' ORDER BY ppa.id''',(d['amount'],normalized_msisdn)).fetchall()
+                matches=c.execute('''SELECT ppa.id,ppa.batch_id FROM pending_payment_allocations ppa JOIN pending_payment_batches pb ON pb.id=ppa.batch_id WHERE ppa.status='PENDING' AND ppa.payment_method='MPESA' AND ABS(ppa.amount-?)<0.009 AND ppa.phone=? AND pb.status='PENDING' AND pb.branch_id=COALESCE(?,pb.branch_id) ORDER BY ppa.id''',(d['amount'],normalized_msisdn,branch_id)).fetchall()
                 if len(matches)==1:
                     matched_batch_id=matches[0]['batch_id']; c.execute('UPDATE pending_payment_allocations SET status="SUCCESS",mpesa_code=?,updated_at=? WHERE id=?',(d['trans_id'],core.now_str(),matches[0]['id'])); status='MATCHED'
         c.execute('UPDATE mpesa_transactions SET status=? WHERE trans_id=?',(status,d['trans_id']))
@@ -3652,10 +3653,15 @@ def do_POST(self):
         except Exception as e:
             return send_json(self, {'error':str(e) or 'Unable to update credit payment. Please check the invoice before retrying.'}, 500)
     try:
-        if path in ('/api/mpesa/stk/callback','/api/mpesa/c2b/confirmation','/api/mpesa/c2b/validation'):
+        branch_callback=re.fullmatch(r'/api/mpesa/branch/(\\d+)/(stk/callback|c2b/confirmation|c2b/validation)',path)
+        if path in ('/api/mpesa/stk/callback','/api/mpesa/c2b/confirmation','/api/mpesa/c2b/validation') or branch_callback:
             payload=core.json_body(self)
-            if path=='/api/mpesa/stk/callback': mpesa_receive_stk(payload)
-            else: mpesa_receive_c2b(payload)
+            if branch_callback:
+                callback_branch_id=int(branch_callback.group(1)); callback_kind=branch_callback.group(2)
+                if callback_kind=='stk/callback': mpesa_receive_stk(payload)
+                elif callback_kind=='c2b/confirmation': mpesa_receive_c2b(payload,callback_branch_id)
+            elif path=='/api/mpesa/stk/callback': mpesa_receive_stk(payload)
+            elif path=='/api/mpesa/c2b/confirmation': mpesa_receive_c2b(payload)
             return send_json(self,{'ResultCode':0,'ResultDesc':'Accepted'})
         if path in ('/settings/logo','/mpesa/recovery') and self.headers.get('Content-Type','').startswith('multipart/form-data'):
             form,self._multipart_upload=parse_multipart_form(self)
