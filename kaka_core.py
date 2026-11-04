@@ -366,6 +366,9 @@ def update_settings(u, values):
             vv=str(v).strip()
             oldrow=c.execute('SELECT value FROM settings WHERE key=?',(k,)).fetchone()
             oldvalue=oldrow['value'] if oldrow else ''
+            # Secret values are never sent back to the browser; blank means retain the saved key.
+            if k=='ai_api_key' and not vv:
+                vv=oldvalue
             if oldvalue != vv: changed_keys.append(k)
             if k in ('idle_timeout_seconds','idle_timeout_minutes','live_refresh_seconds','default_reorder_level','default_payment_transactions','max_payment_transactions','report_default_days','performance_green_threshold_pct','mpesa_recovery_match_window_minutes','subscription_due_day'):
                 n=int(float(vv))
