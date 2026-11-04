@@ -3,11 +3,13 @@ import base64, json, datetime as dt, urllib.request, urllib.parse, secrets, os, 
 class MpesaError(Exception):
     pass
 
-def _setting(core, key, default=''):
+def _setting(core, key, default='', config=None):
+    if config is not None:
+        return config.get(key, default)
     return core.get_setting(key, default)
 
-def _base(core):
-    env=_setting(core,'mpesa_environment','sandbox').lower().strip()
+def _base(core, config=None):
+    env=_setting(core,'mpesa_environment','sandbox',config).lower().strip()
     return 'https://api.safaricom.co.ke' if env=='production' else 'https://sandbox.safaricom.co.ke'
 
 def normalize_phone(phone):
@@ -29,10 +31,10 @@ def _request(url, data=None, headers=None, timeout=30):
     except Exception as exc:
         raise MpesaError(f'M-Pesa connection failed: {exc}') from exc
 
-def get_access_token(core):
-    key=_setting(core,'mpesa_consumer_key','').strip(); secret=_setting(core,'mpesa_consumer_secret','').strip()
+def get_access_token(core, config=None):
+    key=_setting(core,'mpesa_consumer_key','',config).strip(); secret=_setting(core,'mpesa_consumer_secret','',config).strip()
     if not key or not secret: raise MpesaError('M-Pesa Consumer Key and Consumer Secret are not configured in Administrator Settings.')
-    url=_base(core)+'/oauth/v1/generate?grant_type=client_credentials'
+    url=_base(core,config)+'/oauth/v1/generate?grant_type=client_credentials'
     raw=(key+':'+secret).encode('utf-8'); auth=base64.b64encode(raw).decode('ascii')
     req=urllib.request.Request(url, headers={'Authorization':'Basic '+auth,'Accept':'application/json'}, method='GET')
     try:
@@ -44,24 +46,24 @@ def get_access_token(core):
     if not token: raise MpesaError(data.get('errorMessage') or 'Daraja did not return an access token.')
     return token
 
-def stk_push(core, amount, phone, account_reference, description):
-    shortcode=_setting(core,'mpesa_shortcode','').strip(); passkey=_setting(core,'mpesa_passkey','').strip(); callback=_setting(core,'mpesa_callback_base_url','').strip().rstrip('/')
+def stk_push(core, amount, phone, account_reference, description, config=None, branch_id=None):
+    shortcode=_setting(core,'mpesa_shortcode','',config).strip(); passkey=_setting(core,'mpesa_passkey','',config).strip(); callback=_setting(core,'mpesa_callback_base_url','',config).strip().rstrip('/')
     if not shortcode or not passkey or not callback: raise MpesaError('Configure M-Pesa Short Code, Passkey and Public Callback Base URL in Administrator Settings.')
-    phone=normalize_phone(phone); token=get_access_token(core)
+    phone=normalize_phone(phone); token=get_access_token(core,config)
     timestamp=dt.datetime.now().strftime('%Y%m%d%H%M%S')
     password=base64.b64encode((shortcode+passkey+timestamp).encode()).decode('ascii')
-    payload={'BusinessShortCode':shortcode,'Password':password,'Timestamp':timestamp,'TransactionType':'CustomerPayBillOnline' if _setting(core,'mpesa_shortcode_type','PAYBILL')=='PAYBILL' else 'CustomerBuyGoodsOnline','Amount':int(round(float(amount))),'PartyA':phone,'PartyB':shortcode,'PhoneNumber':phone,'CallBackURL':callback+'/api/mpesa/stk/callback','AccountReference':account_reference[:12],'TransactionDesc':description[:13] or 'MONTEZ LIQUOR'}
-    data=_request(_base(core)+'/mpesa/stkpush/v1/processrequest',payload,{'Authorization':'Bearer '+token,'Content-Type':'application/json','Accept':'application/json'})
+    payload={'BusinessShortCode':shortcode,'Password':password,'Timestamp':timestamp,'TransactionType':'CustomerPayBillOnline' if _setting(core,'mpesa_shortcode_type','PAYBILL',config)=='PAYBILL' else 'CustomerBuyGoodsOnline','Amount':int(round(float(amount))),'PartyA':phone,'PartyB':shortcode,'PhoneNumber':phone,'CallBackURL':callback+('/api/mpesa/branch/'+str(int(branch_id)) if branch_id else '')+'/stk/callback','AccountReference':account_reference[:12],'TransactionDesc':description[:13] or 'MONTEZ LIQUOR'}
+    data=_request(_base(core,config)+'/mpesa/stkpush/v1/processrequest',payload,{'Authorization':'Bearer '+token,'Content-Type':'application/json','Accept':'application/json'})
     if data.get('ResponseCode') not in (None,'0',0) and not data.get('CheckoutRequestID'):
         raise MpesaError(data.get('errorMessage') or data.get('ResponseDescription') or 'STK Push was rejected.')
     return data
 
-def register_c2b_urls(core):
-    shortcode=_setting(core,'mpesa_shortcode','').strip(); callback=_setting(core,'mpesa_callback_base_url','').strip().rstrip('/')
+def register_c2b_urls(core, config=None, branch_id=None):
+    shortcode=_setting(core,'mpesa_shortcode','',config).strip(); callback=_setting(core,'mpesa_callback_base_url','',config).strip().rstrip('/')
     if not shortcode or not callback: raise MpesaError('Configure M-Pesa Short Code and Public Callback Base URL first.')
-    token=get_access_token(core)
-    payload={'ShortCode':shortcode,'ResponseType':'Completed','ConfirmationURL':callback+'/api/mpesa/c2b/confirmation','ValidationURL':callback+'/api/mpesa/c2b/validation'}
-    return _request(_base(core)+'/mpesa/c2b/v2/registerurl',payload,{'Authorization':'Bearer '+token,'Content-Type':'application/json','Accept':'application/json'})
+    token=get_access_token(core,config)
+    payload={'ShortCode':shortcode,'ResponseType':'Completed','ConfirmationURL':callback+('/api/mpesa/branch/'+str(int(branch_id)) if branch_id else '')+'/c2b/confirmation','ValidationURL':callback+('/api/mpesa/branch/'+str(int(branch_id)) if branch_id else '')+'/c2b/validation'}
+    return _request(_base(core,config)+'/mpesa/c2b/v2/registerurl',payload,{'Authorization':'Bearer '+token,'Content-Type':'application/json','Accept':'application/json'})
 
 def parse_stk_callback(payload):
     body=(payload or {}).get('Body',{})
