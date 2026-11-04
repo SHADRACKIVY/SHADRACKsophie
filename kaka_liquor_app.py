@@ -1749,6 +1749,7 @@ def branch_mpesa_settings_html(u):
         configs={int(r['branch_id']):dict(r) for r in c.execute("SELECT * FROM branch_mpesa_settings").fetchall()}
     finally:
         c.close()
+    action_script = ''  # Settings page script placeholder; prevents undefined-name failure.
     cards=[]
     for br in branches:
         bid=int(br['id']); cfg=configs.get(bid,{})
