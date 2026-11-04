@@ -1774,7 +1774,7 @@ def branch_mpesa_settings_html(u):
 <div><label>Transaction Description</label><input name="transaction_desc" value="{esc(cfg.get('transaction_desc','MONTEZ LIQUOR'))}" maxlength="13"></div>
 </div>
 <div><label>Reason for this branch's M-Pesa changes (required)</label><input name="change_reason" required minlength="5" placeholder="e.g. Configure branch Till"></div>
-<div class="actions" style="margin-top:10px"><button class="btn gold" type="submit">SAVE {esc(br['name']).upper()} M-PESA SETTINGS</button></div>
+<div class="actions" style="margin-top:10px"><button class="btn gold" type="submit">SAVE {esc(br['name']).upper()} M-PESA SETTINGS</button><button class="btn" type="button" onclick="fetch('/api/mpesa/branch/{bid}/test',{{method:'POST',headers:{{'Content-Type':'application/x-www-form-urlencoded'}},body:'csrf='+encodeURIComponent(document.querySelector('input[name=csrf]').value)}}).then(r=>r.json()).then(d=>alert(d.message||d.error||'Done'))">TEST CONNECTION</button><button class="btn" type="button" onclick="if(confirm('Register this branch shortcode with Safaricom?'))fetch('/api/mpesa/branch/{bid}/register-c2b',{{method:'POST',headers:{{'Content-Type':'application/x-www-form-urlencoded'}},body:'csrf='+encodeURIComponent(document.querySelector('input[name=csrf]').value)}}).then(r=>r.json()).then(d=>alert(d.message||d.error||'Done'))">REGISTER C2B CALLBACKS</button></div>
 <div class="muted" style="margin-top:8px">Branch callback base: {esc(callback)} (branch-specific callback handlers must be active before registering with Safaricom)</div>
 </form></section>''')
     if not cards:
