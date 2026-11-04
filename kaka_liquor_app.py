@@ -3287,6 +3287,43 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception as e:
                     c.rollback(); return send_html(self,branches_page(u,str(e)),400)
                 finally: c.close()
+            if path=='/settings/mpesa-branch':
+                if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
+                reason=str(form.get('change_reason','')).strip()
+                if len(reason)<5: raise ValueError('A reason of at least 5 characters is required for branch M-Pesa changes.')
+                bid=int(form.get('branch_id','0') or 0)
+                enabled=str(form.get('enabled','NO')).upper()
+                environment=str(form.get('environment','production')).lower()
+                shortcode=re.sub(r'\D','',str(form.get('shortcode','')))
+                shortcode_type=str(form.get('shortcode_type','PAYBILL')).upper()
+                consumer_key=str(form.get('consumer_key','')).strip()
+                callback=str(form.get('callback_base_url','')).strip().rstrip('/')
+                if enabled not in ('YES','NO'): raise ValueError('Invalid M-Pesa enable setting.')
+                if environment not in ('sandbox','production'): raise ValueError('Choose SANDBOX or PRODUCTION.')
+                if shortcode_type not in ('PAYBILL','TILL'): raise ValueError('Choose PAYBILL or TILL.')
+                if not shortcode or len(shortcode)<5 or len(shortcode)>12: raise ValueError('Enter the branch Paybill or Till shortcode.')
+                if not consumer_key: raise ValueError('Consumer Key is required.')
+                if not callback.startswith('https://'): raise ValueError('The branch callback base URL must use HTTPS.')
+                c=core.db.c()
+                try:
+                    if not c.execute('SELECT 1 FROM branches WHERE id=? AND active=1',(bid,)).fetchone(): raise ValueError('Selected branch is not active.')
+                    old=c.execute('SELECT consumer_secret,passkey FROM branch_mpesa_settings WHERE branch_id=?',(bid,)).fetchone()
+                    secret=str(form.get('consumer_secret','')).strip() or (old['consumer_secret'] if old else '')
+                    passkey=str(form.get('passkey','')).strip() or (old['passkey'] if old else '')
+                    if enabled=='YES' and (not secret or not passkey): raise ValueError('Consumer Secret and STK Passkey are required before enabling this branch integration.')
+                    ts=core.now_str()
+                    c.execute('''INSERT INTO branch_mpesa_settings(branch_id,enabled,environment,shortcode,shortcode_type,consumer_key,consumer_secret,passkey,callback_base_url,account_reference_prefix,transaction_desc,updated_at,updated_by)
+                                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                                 ON CONFLICT(branch_id) DO UPDATE SET enabled=excluded.enabled,environment=excluded.environment,shortcode=excluded.shortcode,shortcode_type=excluded.shortcode_type,consumer_key=excluded.consumer_key,consumer_secret=excluded.consumer_secret,passkey=excluded.passkey,callback_base_url=excluded.callback_base_url,account_reference_prefix=excluded.account_reference_prefix,transaction_desc=excluded.transaction_desc,updated_at=excluded.updated_at,updated_by=excluded.updated_by''',
+                              (bid,enabled,environment,shortcode,shortcode_type,consumer_key,secret,passkey,callback,str(form.get('account_reference_prefix','MONTEZ')).strip()[:12] or 'MONTEZ',str(form.get('transaction_desc','MONTEZ LIQUOR')).strip()[:13] or 'MONTEZ LIQUOR',ts,u['id']))
+                    core.db.audit(c,u,'UPDATE','BRANCH_MPESA_SETTINGS',str(bid),f'Branch-specific M-Pesa settings updated; enabled={enabled}; shortcode={shortcode}; type={shortcode_type}; reason={reason}')
+                    c.commit()
+                except Exception:
+                    c.rollback(); raise
+                finally:
+                    c.close()
+                add_flash(session_token(self),'Branch-specific M-Pesa settings saved. Payment routing will use these credentials once the branch callback/STK routing update is deployed.','success')
+                return redirect(self,'/settings')
             if path=='/settings':
                 if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
                 try:
