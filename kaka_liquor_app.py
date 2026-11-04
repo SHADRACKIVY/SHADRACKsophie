@@ -316,11 +316,13 @@ async function detectInstalledApp(){
 refresh();
 if(isInstalled())return;
 if(navigator.getInstalledRelatedApps){
-try{var apps=await navigator.getInstalledRelatedApps();if(apps&&apps.length){refresh();}}catch(e){}
+try{var apps=await navigator.getInstalledRelatedApps();if(apps&&apps.length){var b=btn();if(b){b.hidden=true;b.style.display='none';b.setAttribute('aria-hidden','true');b.disabled=true;}note('');}}catch(e){}
 }
 }
 addEventListener('beforeinstallprompt',function(e){e.preventDefault();promptEvent=e;});
-addEventListener('appinstalled',function(){promptEvent=null;refresh();});\naddEventListener('pageshow',refresh);\naddEventListener('focus',refresh);
+addEventListener('appinstalled',function(){promptEvent=null;refresh();});
+addEventListener('pageshow',refresh);
+addEventListener('focus',refresh);
 document.addEventListener('DOMContentLoaded',function(){
 if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js',{scope:'/'}).catch(function(e){console.warn('Service worker registration failed',e);});}
 detectInstalledApp();var b=btn();if(!b||isInstalled())return;
