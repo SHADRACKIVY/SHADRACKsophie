@@ -2898,7 +2898,7 @@ def paybill_cash_transfer_post(u, form):
                 ref=str(form.get('withdrawal_reference','')).strip().upper()
                 if not re.fullmatch(r'[A-Z0-9]{8,15}',ref): raise ValueError('Enter a verified withdrawal reference (8–15 letters or numbers).')
                 duplicate=c.execute("""SELECT 1 FROM mpesa_transactions WHERE UPPER(COALESCE(trans_id,''))=?
-                    UNION ALL SELECT 1 FROM financial_manual_entries WHERE UPPER(reference)=?""",(ref,ref)).fetchone()
+                    UNION ALL SELECT 1 FROM financial_manual_entries WHERE UPPER(reference)=? OR UPPER(description) LIKE '%'||?||'%'""",(ref,ref,ref)).fetchone()
                 if duplicate: raise ValueError('This withdrawal reference has already been recorded.')
                 request_ref=row['request_no']
                 description=f'Paybill withdrawal to branch cash; external reference {ref}; request {request_ref}'
@@ -2919,7 +2919,7 @@ def paybill_cash_transfer_post(u, form):
         raise
     finally:
         c.close()
-    return redirect(CURRENT_HANDLER,'/paybill-cash-transfer')
+    return None
 
 
 def financials_page(u, query=None, message=''):
