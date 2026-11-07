@@ -397,7 +397,6 @@ CURRENT_HANDLER = None
 def add_flash(token, msg, kind='success'):
     if token: FLASH.setdefault(token, []).append((kind,msg))
 
-
 def pop_flashes(token):
     return FLASH.pop(token, [])
 
@@ -797,8 +796,7 @@ def admin_product_delete(u, product_id, restore=False, reason=''):
     if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
     reason=str(reason).strip()
     if len(reason)<5: raise ValueError('A reason of at least 5 characters is required to archive, delete or restore a product.')
-    pid=int(product_id); c=core.db.c()
-    try:
+    pid=int(product_id); c=core.db.c()    try:
         c.execute('BEGIN'); p=c.execute('SELECT * FROM products WHERE id=?',(pid,)).fetchone()
         if not p: raise ValueError('Product not found.')
         ts=now(); active=1 if restore else 0; action='RESTORE' if restore else 'DELETE / ARCHIVE'; c.execute('UPDATE products SET active=?,updated_at=? WHERE id=?',(active,ts,pid)); core.db.audit(c,u,action,'PRODUCT',pid,f'{p["product_no"]} {p["name"]}; reason={reason}'); c.commit()
@@ -1197,8 +1195,7 @@ def active_user_count():
     for token, entry in list(SESSIONS.items()):
         last = float(entry.get('last_activity', 0) or 0)
         if last < cutoff:
-            # Expired sessions are removed so they cannot remain in the live count.
-            SESSIONS.pop(token, None)
+            # Expired sessions are removed so they cannot remain in the live count.            SESSIONS.pop(token, None)
             CSRF.pop(token, None)
             FLASH.pop(token, None)
             continue
@@ -1597,8 +1594,7 @@ def stock_report_page(u, form=None, query=None):
     content=f'''<section class="card"><div class="section-head"><h2>Branch Stock Movement Report</h2><span class="pill">{esc(preset)}</span></div><div class="notice"><b>Viewing: {esc(selected_name)}</b> · Each branch has its own opening, purchases, sales, adjustments and closing stock. A sale in one branch does not change another branch's quantity.</div>{selector}{range_toolbar('/stock-report',fd,ft,td,tt,branch_id)}{channel_summary}<div class="actions" style="margin-top:10px"><button type="button" class="btn" onclick="window.print()">PRINT</button><a class="btn" href="{exp.format(fmt='pdf')}">DOWNLOAD PDF</a><a class="btn" href="{exp.format(fmt='xlsx')}">DOWNLOAD EXCEL</a><a class="btn danger" href="/reorder-report?from_date={quote(fd)}&from_time={quote(ft)}&to_date={quote(td)}&to_time={quote(tt)}">REORDER REPORT</a></div></section><section class="card report-print" style="margin-top:14px">{table}</section>'''
     return layout(u,'Branch Stock Report',content,'/stock-report','Branch-by-branch opening, purchase, sales and closing stock')
 
-def reorder_report_page(u, query=None):
-    require_perm_user(u,'VIEW_STOCK')
+def reorder_report_page(u, query=None):    require_perm_user(u,'VIEW_STOCK')
     branch_id=branch_scope_for(u,query)
     rows=[r for r in core.stock_report('1900-01-01 00:00:00','2999-12-31 23:59:59',branch_id) if r['status'] in ('LOW STOCK','OUT OF STOCK')]
     selector=branch_scope_selector(u,query,'/reorder-report')
@@ -1997,8 +1993,7 @@ def export_sale(handler, u, qs):
     if fmt not in ('pdf','xlsx'): raise ValueError('Unsupported export format.')
     title,headers,rows=sale_export_data(receipt)
     st=core.get_settings(); title=f"{st.get('business_name',APP_NAME)} · {st.get('business_branch_name','')} · {title}"
-    data,ctype,fn=_export_rows(title,headers,rows,fmt)
-    return send_file(handler,data,ctype,fn)
+    data,ctype,fn=_export_rows(title,headers,rows,fmt)    return send_file(handler,data,ctype,fn)
 
 def export_report_v2(handler, u, qs):
     require_perm_user(u,'PRINT_EXPORT')
@@ -2397,8 +2392,7 @@ def _match_recovery_transaction(u, txn):
     try:
         candidates=_recovery_candidates(c,txn,include_time=True)
         if not candidates:
-            return {'status':'UNMATCHED','message':'No safe pending product/payment match was found.'}
-        if len(candidates)!=1:
+            return {'status':'UNMATCHED','message':'No safe pending product/payment match was found.'}        if len(candidates)!=1:
             return {'status':'UNMATCHED','message':f'{len(candidates)} possible pending matches found; left for Administrator review.'}
         candidate=candidates[0]
         result=_apply_recovered_transaction(c,txn,candidate['allocation_id'])
@@ -2797,8 +2791,7 @@ def financials_page(u, query=None, message=''):
     <div class="actions" style="margin:10px 0"><a class="btn" href="/financials?account={account}&preset=TODAY">TODAY</a><a class="btn" href="/financials?account={account}&preset=THIS_WEEK">THIS WEEK</a><a class="btn" href="/financials?account={account}&preset=THIS_MONTH">THIS MONTH</a><a class="btn" href="/financials?account={account}&preset=LAST_MONTH">LAST MONTH</a></div>
     <div class="metric-grid"><div class="metric"><div class="muted">OPENING BALANCE</div><div class="v">{money(data["opening"])}</div></div><div class="metric"><div class="muted">TOTAL MONEY IN</div><div class="v">{money(data["money_in"])}</div></div><div class="metric"><div class="muted">TOTAL MONEY OUT</div><div class="v">{money(data["money_out"])}</div></div><div class="metric"><div class="muted">CLOSING BALANCE</div><div class="v">{money(data["closing"])}</div></div></div>
     <div class="actions" style="margin:12px 0"><button class="btn" type="button" onclick="window.print()">PRINT STATEMENT</button><a class="btn" href="{export.format(fmt="pdf")}">DOWNLOAD PDF</a><a class="btn" href="{export.format(fmt="xlsx")}">DOWNLOAD EXCEL</a></div>
-    {html_table(["Date & Time","Transaction Code / Reference","Description","Branch","Money In","Money Out","Running Balance"],rows,"No financial transactions found for this period.")}</section>'''
-    transfer_form=f'''<section class="card" style="margin-top:14px"><h2>Cash → Paybill Approval Workflow</h2><p>All users submit requests on the Cash → Paybill Requests page. Management or Administrator approves before posting.</p><a class="btn gold" href="/cash-paybill-transfer">OPEN TRANSFER REQUESTS</a></section>'''
+    {html_table(["Date & Time","Transaction Code / Reference","Description","Branch","Money In","Money Out","Running Balance"],rows,"No financial transactions found for this period.")}</section>'''    transfer_form=f'''<section class="card" style="margin-top:14px"><h2>Cash → Paybill Approval Workflow</h2><p>All users submit requests on the Cash → Paybill Requests page. Management or Administrator approves before posting.</p><a class="btn gold" href="/cash-paybill-transfer">OPEN TRANSFER REQUESTS</a></section>'''
     opening_form=f'''<section class="card" style="margin-top:14px"><div class="section-head"><h2>Set Initial Financial Balances</h2><span class="pill">ONE-TIME SETUP</span></div>
     <p class="muted">Enter verified balances already held when the system's financial tracking starts. Each account/branch can be initialized only once; the entry is retained in the audit trail.</p>
     <form method="post" action="/financials" class="form-grid">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="opening">
@@ -3048,6 +3041,235 @@ def confirm_subscription_payment(u, form):
         c.rollback(); raise
     finally: c.close()
 
+
+
+def ensure_cash_paybill_schema():
+    c=core.db.c()
+    try:
+        c.execute('''CREATE TABLE IF NOT EXISTS cash_paybill_requests(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,request_no TEXT NOT NULL UNIQUE,
+            branch_id INTEGER NOT NULL REFERENCES branches(id),amount REAL NOT NULL CHECK(amount>0),
+            deposit_reference TEXT,note TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'PENDING'
+            CHECK(status IN ('PENDING','APPROVED','REJECTED')),
+            requested_by INTEGER NOT NULL REFERENCES users(id),requested_at TEXT NOT NULL,
+            reviewed_by INTEGER REFERENCES users(id),reviewed_at TEXT,review_note TEXT,transfer_no TEXT,posted_at TEXT)''')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_cash_paybill_requests_status ON cash_paybill_requests(status,requested_at)')
+        c.execute('''CREATE TABLE IF NOT EXISTS financial_opening_balances(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,account TEXT NOT NULL CHECK(account IN ('CASH','PAYBILL')),
+            branch_key INTEGER NOT NULL DEFAULT 0,amount REAL NOT NULL CHECK(amount>=0),effective_at TEXT NOT NULL,
+            note TEXT NOT NULL,created_at TEXT NOT NULL,created_by INTEGER NOT NULL REFERENCES users(id),
+            UNIQUE(account,branch_key))''')
+        c.execute('''CREATE TABLE IF NOT EXISTS financial_manual_entries(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,account TEXT NOT NULL CHECK(account IN ('CASH','PAYBILL')),
+            branch_id INTEGER REFERENCES branches(id),direction TEXT NOT NULL CHECK(direction IN ('IN','OUT')),
+            amount REAL NOT NULL CHECK(amount>0),reference TEXT NOT NULL,description TEXT NOT NULL,
+            occurred_at TEXT NOT NULL,created_at TEXT NOT NULL,created_by INTEGER NOT NULL REFERENCES users(id),
+            UNIQUE(account,reference))''')
+        c.execute('''CREATE TABLE IF NOT EXISTS financial_transfers(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,transfer_no TEXT NOT NULL UNIQUE,
+            branch_id INTEGER NOT NULL REFERENCES branches(id),amount REAL NOT NULL CHECK(amount>0),
+            mpesa_code TEXT NOT NULL UNIQUE,deposit_reference TEXT,note TEXT NOT NULL,
+            created_at TEXT NOT NULL,created_by INTEGER NOT NULL REFERENCES users(id))''')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_financial_transfers_branch_date ON financial_transfers(branch_id,created_at)')
+        c.commit()
+    finally: c.close()
+
+
+def financial_statement_data(account,start,end,branch_id=None,conn=None):
+    account=str(account).upper()
+    if account not in ('CASH','PAYBILL'): raise ValueError('Invalid financial account.')
+    own=conn is None; c=conn or core.db.c()
+    try:
+        opening=0.0; period_opening=0.0
+        sql='SELECT amount,effective_at FROM financial_opening_balances WHERE account=?'
+        args=[account]
+        if branch_id is not None: sql+=' AND branch_key IN (0,?)'; args.append(int(branch_id))
+        for r in c.execute(sql,args).fetchall():
+            eff=str(r['effective_at'] or '1900-01-01 00:00:00')
+            if eff<=start: opening+=float(r['amount'] or 0)
+            elif eff<=end: period_opening+=float(r['amount'] or 0)
+        method='CASH' if account=='CASH' else 'MPESA'
+        spend='Cash' if account=='CASH' else 'M-Pesa'
+        movements=[]
+        def collect(sql,args,kind,direction):
+            for r in c.execute(sql,args).fetchall():
+                movements.append((str(r['occurred_at'] or ''),float(r['amount'] or 0),direction,kind,str(r['reference'] or '')))
+        # Carry forward source activity before the selected period.
+        def total(sql,args):
+            return sum(float(r['amount'] or 0) for r in c.execute(sql,args).fetchall())
+        h_in=h_out=0.0
+        sql="""SELECT sp.amount FROM sale_payments sp JOIN sales s ON s.id=sp.sale_id
+               WHERE upper(replace(sp.payment_method,'-',''))=? AND sp.paid_at<?"""
+        a=[method,start]
+        if branch_id is not None: sql+=' AND s.branch_id=?'; a.append(int(branch_id))
+        h_in+=total(sql,a)
+        sql="""SELECT total amount FROM purchases WHERE lower(replace(payment_method,'-',''))=lower(replace(?,'-','')) AND purchased_at<?"""
+        a=[spend,start]
+        if branch_id is not None: sql+=' AND branch_id=?'; a.append(int(branch_id))
+        h_out+=total(sql,a)
+        sql="""SELECT amount FROM expenses WHERE lower(replace(payment_method,'-',''))=lower(replace(?,'-','')) AND expense_date<?"""
+        a=[spend,start]
+        if branch_id is not None: sql+=' AND branch_id=?'; a.append(int(branch_id))
+        h_out+=total(sql,a)
+        sql='SELECT amount FROM financial_transfers WHERE created_at<?'; a=[start]
+        if branch_id is not None: sql+=' AND branch_id=?'; a.append(int(branch_id))
+        ht=total(sql,a)
+        if account=='CASH': h_out+=ht
+        else: h_in+=ht
+        sql='SELECT amount,direction FROM financial_manual_entries WHERE account=? AND occurred_at<?'; a=[account,start]
+        if branch_id is not None: sql+=' AND (branch_id=? OR branch_id IS NULL)'; a.append(int(branch_id))
+        for r in c.execute(sql,a).fetchall():
+            if r['direction']=='IN': h_in+=float(r['amount'] or 0)
+            else: h_out+=float(r['amount'] or 0)
+        opening+=h_in-h_out
+        # Period sales receipts.
+        sql="""SELECT sp.amount,sp.paid_at occurred_at,s.receipt_no reference
+               FROM sale_payments sp JOIN sales s ON s.id=sp.sale_id
+               WHERE upper(replace(sp.payment_method,'-',''))=? AND sp.paid_at BETWEEN ? AND ?"""
+        a=[method,start,end]
+        if branch_id is not None: sql+=' AND s.branch_id=?'; a.append(int(branch_id))
+        collect(sql,a,'SALE RECEIPT','IN')
+        # Period purchases and operating expenses.
+        sql="""SELECT total amount,purchased_at occurred_at,purchase_no reference FROM purchases
+               WHERE lower(replace(payment_method,'-',''))=lower(replace(?,'-','')) AND purchased_at BETWEEN ? AND ?"""
+        a=[spend,start,end]
+        if branch_id is not None: sql+=' AND branch_id=?'; a.append(int(branch_id))
+        collect(sql,a,'PURCHASE','OUT')
+        sql="""SELECT amount,expense_date occurred_at,expense_no reference FROM expenses
+               WHERE lower(replace(payment_method,'-',''))=lower(replace(?,'-','')) AND expense_date BETWEEN ? AND ?"""
+        a=[spend,start,end]
+        if branch_id is not None: sql+=' AND branch_id=?'; a.append(int(branch_id))
+        collect(sql,a,'EXPENSE','OUT')
+        # A posted cash-to-Paybill transfer is an internal movement, never revenue/expense.
+        sql='SELECT amount,created_at occurred_at,transfer_no reference FROM financial_transfers WHERE created_at BETWEEN ? AND ?'; a=[start,end]
+        if branch_id is not None: sql+=' AND branch_id=?'; a.append(int(branch_id))
+        transfers=c.execute(sql,a).fetchall()
+        tin=tout=0.0
+        for r in transfers:
+            amt=float(r['amount'] or 0)
+            if account=='CASH': movements.append((str(r['occurred_at']),amt,'OUT','CASH TO PAYBILL',str(r['reference']))); tout+=amt
+            else: movements.append((str(r['occurred_at']),amt,'IN','CASH TO PAYBILL',str(r['reference']))); tin+=amt
+        sql='SELECT amount,occurred_at,reference,direction,description FROM financial_manual_entries WHERE account=? AND occurred_at BETWEEN ? AND ?'; a=[account,start,end]
+        if branch_id is not None: sql+=' AND (branch_id=? OR branch_id IS NULL)'; a.append(int(branch_id))
+        for r in c.execute(sql,a).fetchall():
+            movements.append((str(r['occurred_at']),float(r['amount'] or 0),str(r['direction']),str(r['description']),str(r['reference'])))
+        inflows=period_opening+sum(x[1] for x in movements if x[2]=='IN')
+        outflows=sum(x[1] for x in movements if x[2]=='OUT')
+        return {'account':account,'opening':round(opening,2),'inflows':round(inflows,2),'outflows':round(outflows,2),
+                'transfer_in':round(tin,2),'transfer_out':round(tout,2),'closing':round(opening+inflows-outflows,2),
+                'movements':sorted(movements,key=lambda x:x[0])}
+    finally:
+        if own: c.close()
+
+
+def cash_paybill_transfer_page(u,message=''):
+    ensure_cash_paybill_schema(); role=role_name(u); c=core.db.c()
+    try:
+        branches=[dict(r) for r in c.execute('SELECT id,name FROM branches WHERE active=1 ORDER BY name').fetchall()]
+        sql='''SELECT r.*,b.name branch_name,ru.full_name requester,COALESCE(vu.full_name,'') reviewer
+               FROM cash_paybill_requests r JOIN branches b ON b.id=r.branch_id
+               JOIN users ru ON ru.id=r.requested_by LEFT JOIN users vu ON vu.id=r.reviewed_by'''
+        if role=='SALES': rows=c.execute(sql+' WHERE r.requested_by=? ORDER BY r.id DESC LIMIT 100',(u['id'],)).fetchall()
+        else: rows=c.execute(sql+" ORDER BY CASE WHEN r.status='PENDING' THEN 0 ELSE 1 END,r.id DESC LIMIT 250").fetchall()
+    finally: c.close()
+    notice=f'<div class="flash error">{esc(message)}</div>' if message else ''
+    if role=='SALES':
+        branch_field=f'<input type="hidden" name="branch_id" value="{int(u.get("branch_id") or 0)}"><div class="notice">Request will be assigned to your registered branch.</div>'
+    else:
+        opts='<option value="">Select branch</option>'+''.join(f'<option value="{b["id"]}">{esc(b["name"])}</option>' for b in branches)
+        branch_field=f'<div><label>Branch *</label><select name="branch_id" required>{opts}</select></div>'
+    form=f'''<section class="card"><h2>Request Cash → Paybill Transfer</h2><p>Requests do not change balances. Management or Administrator must approve after the physical Paybill deposit is verified.</p>
+    <form method="post" action="/cash-paybill-transfer">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="request">
+    <div class="form-grid">{branch_field}<div><label>Amount (KSh) *</label><input type="number" name="amount" min="1" step="0.01" required></div>
+    <div><label>Deposit Reference (optional at request)</label><input name="deposit_reference" maxlength="20"></div>
+    <div style="grid-column:1/-1"><label>Reason / Notes *</label><textarea name="note" minlength="5" required></textarea></div></div>
+    <button class="btn gold" style="margin-top:12px" type="submit">SUBMIT REQUEST</button></form></section>'''
+    rows_html=[]
+    for r in rows:
+        action=f'<span class="pill">{esc(r["status"])}</span>'
+        if r['status']=='PENDING' and role in ('ADMIN','MANAGEMENT') and int(r['requested_by'])!=int(u['id']):
+            action=f'''<details><summary class="btn gold">REVIEW</summary><div class="card" style="min-width:250px;margin-top:8px">
+            <form method="post" action="/cash-paybill-transfer" onsubmit="return confirm('Approve only after verifying the actual Paybill deposit. Continue?')">{csrf_input(CURRENT_HANDLER)}
+            <input type="hidden" name="action" value="approve"><input type="hidden" name="request_id" value="{r["id"]}">
+            <label>Verified M-Pesa deposit reference *</label><input name="deposit_reference" required maxlength="20" value="{esc(r["deposit_reference"] or "")}">
+            <label>Approval note</label><input name="review_note" maxlength="200"><button class="btn gold" type="submit">APPROVE &amp; POST</button></form>
+            <form method="post" action="/cash-paybill-transfer" style="margin-top:8px">{csrf_input(CURRENT_HANDLER)}
+            <input type="hidden" name="action" value="reject"><input type="hidden" name="request_id" value="{r["id"]}">
+            <label>Rejection reason *</label><input name="review_note" minlength="5" required><button class="btn danger" type="submit">REJECT</button></form></div></details>'''
+        rows_html.append([esc(r['requested_at']),esc(r['request_no']),esc(r['branch_name']),money(r['amount']),esc(r['requester']),esc(r['deposit_reference'] or '—'),esc(r['status']),esc(r['reviewer'] or '—'),action])
+    table=html_table(['Date','Request No.','Branch','Amount','Requested By','Deposit Ref','Status','Reviewed By','Action'],rows_html,'No transfer requests recorded.')
+    note='<div class="notice">Management can approve or reject requests. Full account statements are Administrator-only.</div>' if role=='MANAGEMENT' else ''
+    return layout(u,'Cash → Paybill Requests',notice+form+note+f'<section class="card" style="margin-top:14px"><h2>Transfer Requests</h2>{table}</section>','/cash-paybill-transfer')
+
+
+def financials_page(u,query=None,message=''):
+    if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
+    ensure_cash_paybill_schema(); q=query or {}
+    fd,ft,td,tt,preset=period_from_query(q); start=f'{fd} {ft}:00'; end=f'{td} {tt}:59'
+    raw=_qsval(q,'branch_id',''); bid=int(raw) if str(raw).isdigit() and int(raw)>0 else None
+    c=core.db.c()
+    try:
+        branches=[dict(r) for r in c.execute('SELECT id,name FROM branches ORDER BY name').fetchall()]
+        requests=c.execute('SELECT r.*,b.name branch_name FROM cash_paybill_requests r JOIN branches b ON b.id=r.branch_id ORDER BY r.id DESC LIMIT 100').fetchall()
+    finally: c.close()
+    cash=financial_statement_data('CASH',start,end,bid); pay=financial_statement_data('PAYBILL',start,end,bid)
+    opts='<option value="">All branches</option>'+''.join(f'<option value="{b["id"]}" {"selected" if bid==int(b["id"]) else ""}>{esc(b["name"])}</option>' for b in branches)
+    toolbar=f'<form method="get" action="/financials" class="toolbar"><div><label>Branch</label><select name="branch_id">{opts}</select></div><div><label>From</label><input type="date" name="from_date" value="{fd}"></div><div><label>To</label><input type="date" name="to_date" value="{td}"></div><button class="btn gold">APPLY</button></form>'
+    def card(d):
+        return f'<section class="card"><h2>{d["account"]} STATEMENT</h2><div class="grid four"><div class="metric">OPENING<div class="v">{money(d["opening"])}</div></div><div class="metric">MONEY IN<div class="v">{money(d["inflows"])}</div></div><div class="metric">MONEY OUT<div class="v">{money(d["outflows"])}</div></div><div class="metric">CLOSING<div class="v">{money(d["closing"])}</div></div></div><p class="muted">Transfers in {money(d["transfer_in"])} · transfers out {money(d["transfer_out"])}. Transfers are internal movements, not income or expenses.</p></section>'
+    movements=[]
+    for d in (cash,pay):
+        for when,amount,direction,kind,ref in d['movements']: movements.append([esc(when),d['account'],esc(kind),esc(ref),direction,money(amount)])
+    movements.sort(key=lambda r:r[0])
+    req_table=html_table(['Request No.','Branch','Amount','Status','Requested','Posted','Deposit Reference'],[[esc(r['request_no']),esc(r['branch_name']),money(r['amount']),esc(r['status']),esc(r['requested_at']),esc(r['posted_at'] or '—'),esc(r['deposit_reference'] or '—')] for r in requests])
+    reason=f'<div class="flash error">{esc(message)}</div>' if message else ''
+    opening_form=f'''<section class="card"><h2>Set Opening Balances</h2><p class="muted">Reconcile the physical cash or actual Paybill balance first. Saving replaces the opening balance for the selected account and branch only.</p>
+    <form method="post" action="/financials">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="set_opening"><div class="form-grid">
+    <div><label>Account</label><select name="account"><option>CASH</option><option>PAYBILL</option></select></div>
+    <div><label>Branch</label><select name="branch_key"><option value="0">Company / all branches</option>{''.join(f'<option value="{b["id"]}">{esc(b["name"])}</option>' for b in branches)}</select></div>
+    <div><label>Opening Amount (KSh)</label><input type="number" name="amount" min="0" step="0.01" required></div>
+    <div><label>Effective Date</label><input type="date" name="effective_date" value="{dt.date.today().isoformat()}" required></div>
+    <div style="grid-column:1/-1"><label>Reason *</label><input name="note" minlength="5" required></div></div><button class="btn gold" style="margin-top:10px">SAVE OPENING BALANCE</button></form></section>'''
+    links=f'<div class="actions"><a class="btn" href="/financials/export?format=xlsx&start={quote(start)}&end={quote(end)}&branch_id={bid or ""}">EXCEL</a><a class="btn" href="/financials/export?format=pdf&start={quote(start)}&end={quote(end)}&branch_id={bid or ""}">PDF</a><button class="btn" type="button" onclick="window.print()">PRINT</button></div>'
+    content=reason+toolbar+links+card(cash)+'<div style="margin-top:14px">'+card(pay)+'</div>'+opening_form+'<section class="card"><h2>Cash → Paybill Request History</h2>'+req_table+'</section><section class="card"><h2>Account Movements</h2>'+html_table(['Date','Account','Type','Reference','Direction','Amount'],movements,'No movements in this period.')+'</section>'
+    return layout(u,'Cash & Paybill Statements',content,'/financials')
+
+
+def financials_post(u,form):
+    if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
+    ensure_cash_paybill_schema()
+    if form.get('action')!='set_opening': raise ValueError('Unknown financial statement action.')
+    account=str(form.get('account','')).upper(); bid=int(form.get('branch_key','0') or 0)
+    amount=round(float(form.get('amount','-1') or -1),2); effective=str(form.get('effective_date','')).strip(); note=str(form.get('note','')).strip()
+    if account not in ('CASH','PAYBILL') or amount<0 or len(note)<5: raise ValueError('Enter a valid account, non-negative amount and reason of at least 5 characters.')
+    dt.date.fromisoformat(effective); c=core.db.c()
+    try:
+        c.execute('BEGIN IMMEDIATE')
+        if bid and not c.execute('SELECT 1 FROM branches WHERE id=?',(bid,)).fetchone(): raise ValueError('Branch not found.')
+        ts=now(); eff=effective+' 00:00:00'
+        old=c.execute('SELECT amount FROM financial_opening_balances WHERE account=? AND branch_key=?',(account,bid)).fetchone()
+        c.execute('''INSERT INTO financial_opening_balances(account,branch_key,amount,effective_at,note,created_at,created_by)
+            VALUES(?,?,?,?,?,?,?) ON CONFLICT(account,branch_key) DO UPDATE SET amount=excluded.amount,effective_at=excluded.effective_at,note=excluded.note,created_at=excluded.created_at,created_by=excluded.created_by''',
+            (account,bid,amount,eff,note,ts,u['id']))
+        core.db.audit(c,u,'SET OPENING BALANCE','FINANCIAL ACCOUNT',f'{account}:{bid}',f'old={float(old["amount"]):.2f}' if old else 'old=not set'+f'; new={amount:.2f}; effective={eff}; reason={note}')
+        c.commit()
+    except Exception: c.rollback(); raise
+    finally: c.close()
+
+
+def financials_export(handler,u,query):
+    if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
+    ensure_cash_paybill_schema(); start=_qsval(query,'start',''); end=_qsval(query,'end','')
+    if not start or not end or start>end: raise ValueError('Invalid statement period.')
+    raw=_qsval(query,'branch_id',''); bid=int(raw) if str(raw).isdigit() and int(raw)>0 else None
+    rows=[]
+    for account in ('CASH','PAYBILL'):
+        d=financial_statement_data(account,start,end,bid); rows.append([account,'OPENING BALANCE',d['opening'],''])
+        rows.extend([[account,kind,amount if direction=='IN' else -amount,when+' '+ref] for when,amount,direction,kind,ref in d['movements']])
+        rows.append([account,'CLOSING BALANCE',d['closing'],''])
+    data,ctype,fn=_export_rows('MONTEZ LIQUOR CASH AND PAYBILL STATEMENTS',['Account','Description','Signed Amount (KSh)','Date / Reference'],rows,_qsval(query,'format','xlsx').lower())
+    return send_file(handler,data,ctype,fn)
+
 class Handler(BaseHTTPRequestHandler):
     server_version='MONTEZ-LIQUOR/1.0'
     def log_message(self, fmt,*args):
@@ -3134,6 +3356,13 @@ class Handler(BaseHTTPRequestHandler):
             if not check_csrf(self, form):
                 if path == '/customers/credit-payment': return send_json(self, {'error':'Invalid form token. Please refresh the page and try again.'},400)
                 return send_html(self, error_page('Invalid form token. Please refresh and try again.',400),400)
+            if path=='/financials':
+                try:
+                    financials_post(u,form)
+                    add_flash(session_token(self),'Opening balance saved and recorded in the Audit Log.','success')
+                    return redirect(self,'/financials')
+                except Exception as e:
+                    return send_html(self,financials_page(u,message=str(e)),400)
             if path=='/cash-paybill-transfer':
                 try:
                     ensure_cash_paybill_schema()
@@ -3188,7 +3417,9 @@ class Handler(BaseHTTPRequestHandler):
                                 available=financial_statement_data('CASH','1900-01-01 00:00:00','2999-12-31 23:59:59',int(row['branch_id']),c)['closing']
                                 if amount>available:
                                     raise ValueError(f'Insufficient recorded cash in {row["branch_name"]}. Available: {money(available)}. Request remains pending.')
-                                deposit_ref=str(row['deposit_reference'] or '').strip().upper()
+                                deposit_ref=str(form.get('deposit_reference') or row['deposit_reference'] or '').strip().upper()
+                                if not re.fullmatch(r'[A-Z0-9]{8,15}',deposit_ref):
+                                    raise ValueError('Enter the verified M-Pesa deposit reference (8–15 letters or numbers) before approval.')
                                 if deposit_ref:
                                     duplicate=c.execute("""SELECT 1 FROM financial_transfers WHERE UPPER(mpesa_code)=?
                                         UNION ALL SELECT 1 FROM sale_payments WHERE UPPER(COALESCE(mpesa_code,''))=?
@@ -3197,8 +3428,7 @@ class Handler(BaseHTTPRequestHandler):
                                     if duplicate:
                                         raise ValueError('This M-Pesa/deposit reference has already been used. Correct the reference before approval.')
                                 transfer_no='TRF-'+dt.datetime.now().strftime('%Y%m%d%H%M%S')+'-'+secrets.token_hex(3).upper()
-                                transfer_code=deposit_ref or ('INT'+secrets.token_hex(8).upper())
-                                c.execute('''INSERT INTO financial_transfers(transfer_no,branch_id,amount,mpesa_code,deposit_reference,note,created_at,created_by)
+                                transfer_code=deposit_ref or ('INT'+secrets.token_hex(8).upper())                                c.execute('''INSERT INTO financial_transfers(transfer_no,branch_id,amount,mpesa_code,deposit_reference,note,created_at,created_by)
                                     VALUES(?,?,?,?,?,?,?,?)''',(transfer_no,int(row['branch_id']),amount,transfer_code,deposit_ref,('Approved request '+row['request_no']+': '+str(row['note']))[:250],ts,u['id']))
                                 cur=c.execute('''UPDATE cash_paybill_requests SET status='APPROVED',reviewed_by=?,reviewed_at=?,review_note=?,transfer_no=?,posted_at=?
                                     WHERE id=? AND status='PENDING' ''',(u['id'],ts,review_note,transfer_no,ts,request_id))
@@ -3597,8 +3827,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise RuntimeError(f'Backup rejected: {missing_hashes} login account(s) have no stored password hash.')
             if not ready:
                 raise RuntimeError('Backup is valid SQLite, but incomplete: it contains no registered products or business transactions. Add/import real business records before creating the complete backup.')
-            # Embed a manifest in the delivered database so its contents can be audited later.
-            snap.execute('''CREATE TABLE IF NOT EXISTS backup_manifest(
+            # Embed a manifest in the delivered database so its contents can be audited later.            snap.execute('''CREATE TABLE IF NOT EXISTS backup_manifest(
                 id INTEGER PRIMARY KEY CHECK(id=1),
                 app_name TEXT NOT NULL,
                 created_at TEXT NOT NULL,
