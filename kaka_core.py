@@ -449,6 +449,10 @@ def user_from(h, touch=True):
 
 def role_name(u):
     if not u: return ''
+    # ADMIN is the application-wide superuser. A legacy or stale access_role
+    # must never downgrade an account whose base role is ADMIN.
+    roles={str(u.get('role') or '').upper(),str(u.get('access_role') or '').upper()}
+    if 'ADMIN' in roles: return 'ADMIN'
     return str(u.get('access_role') or u.get('role') or 'SALES').upper()
 
 def role_permissions(role):
@@ -528,7 +532,8 @@ def require(h, role=None):
     u=user_from(h)
     if not u: raise PermissionError('Please log in.')
     actual=role_name(u)
-    if role and actual not in ([role] if isinstance(role,str) else role): raise PermissionError('Administrator permission required.')
+    # The authenticated Administrator supersedes role-scoped access gates.
+    if role and actual!='ADMIN' and actual not in ([role] if isinstance(role,str) else role): raise PermissionError('Administrator permission required.')
     return u
 
 def validate_payments(c, payments, total):
