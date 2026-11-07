@@ -570,6 +570,25 @@ def save_product(u, form):
     finally: c.close()
 
 
+def admin_update_product_name(u, form):
+    if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
+    pid=int(form.get('product_id','0') or 0); name=form.get('name','').strip(); reason=form.get('reason','').strip()
+    if pid<=0 or not name: raise ValueError('Select a product and enter its new name.')
+    if len(name)>120: raise ValueError('Product name must be 120 characters or fewer.')
+    c=core.db.c()
+    try:
+        p=c.execute('SELECT * FROM products WHERE id=?',(pid,)).fetchone()
+        if not p: raise ValueError('Product not found.')
+        old_name=p['name']
+        if old_name==name: raise ValueError('The product name is unchanged.')
+        ts=now(); c.execute('UPDATE products SET name=?,updated_at=? WHERE id=?',(name,ts,pid))
+        core.db.audit(c,u,'UPDATE','PRODUCT',pid,f'Product name changed: {old_name} -> {name}; reason={reason or "Administrator name correction"}')
+        c.commit()
+    except Exception:
+        c.rollback(); raise
+    finally: c.close()
+
+
 def admin_update_product(u, form):
     if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
     pid=int(form.get('product_id','0') or 0); name=form.get('name','').strip(); cat=form.get('category','').strip(); sell=float(form.get('sell_price','0') or 0); wholesale=float(form.get('wholesale_price',form.get('sell_price','0')) or 0); reorder=float(form.get('reorder_level','5') or 5); reason=form.get('reason','').strip()
@@ -1652,9 +1671,10 @@ def products_page(u, message='', query=None):
             ])
             stock=f'''<form method="post" action="/products" class="inline-actions">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="stock"><input type="hidden" name="product_id" value="{pid}"><input name="new_stock" aria-label="New stock quantity" type="number" step="1" min="0" value="{r['branch_qty']}" required style="width:90px"><input type="hidden" name="branch_id" value="{branch_id}"><input name="reason" placeholder="Stock correction reason" required minlength="5" style="width:180px"><button class="btn">ADJUST STOCK</button></form>'''
             action_btn=f'''<form method="post" action="/products" class="inline-actions" onsubmit="return confirm('Archive this product? Historical records will be preserved.');">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="delete"><input type="hidden" name="product_id" value="{pid}"><input name="reason" placeholder="Reason required" required minlength="5" style="width:180px"><button class="btn danger">ARCHIVE</button></form>''' if r['active'] else f'''<form method="post" action="/products" class="inline-actions">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="restore"><input type="hidden" name="product_id" value="{pid}"><input name="reason" placeholder="Reason required" required minlength="5" style="width:180px"><button class="btn">RESTORE</button></form>'''
-            action_rows.append([esc(r['name']),stock,action_btn])
+            name_edit=f'''<form method="post" action="/products" class="inline-actions">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="edit_name"><input type="hidden" name="product_id" value="{pid}"><input name="name" value="{esc(r['name'])}" aria-label="New product name" required maxlength="120" style="width:180px"><input name="reason" placeholder="Reason (optional)" style="width:150px"><button class="btn gold">SAVE NAME</button></form>'''
+            action_rows.append([name_edit,stock,action_btn])
         bulk_table=html_table(['Product','Retail Price','Wholesale Price','COGS / Unit Cost','Branch Stock','Stock Value at Cost','Reorder Level','Status'],price_rows,'No products registered.')
-        action_table=html_table(['Product','Stock Quantity Adjustment','Archive / Restore'],action_rows,'No products registered.')
+        action_table=html_table(['Administrator Product Name Editor','Stock Quantity Adjustment','Archive / Restore'],action_rows,'No products registered.')
         extra=f'''<section class="card" style="margin-top:14px"><div class="notice"><b>QUICK STOCK EDIT:</b> Edit any number of retail prices, wholesale prices, COGS/unit costs and reorder levels, then click SAVE ALL STOCK CHANGES once. No confirmation or reason is required; the system records an automatic audit note. Stock quantities are preserved and adjusted separately.</div><form method="post" action="/products" id="bulk-stock-edit">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="bulk_save"><input type="hidden" name="branch_id" value="{branch_id}">{bulk_table}<div class="actions" style="margin-top:14px"><button class="btn gold" type="submit">SAVE ALL STOCK CHANGES</button><button class="btn" type="reset">CANCEL UNSAVED CHANGES</button></div></form><h3 style="margin-top:24px">Separate Stock Quantity / Product Status Actions</h3><p class="muted">Use these only when you need to correct physical stock or archive/restore a product. They require their own reason to preserve the stock audit trail.</p>{action_table}</section>'''
         title='Product Registration & Branch Stock Editor'; subtitle='Edit costs and prices for the selected branch'
     else:
@@ -3251,6 +3271,9 @@ class Handler(BaseHTTPRequestHandler):
                         save_product(u,form); msg='Product saved successfully. Product registered successfully.'
                     elif action=='bulk_save':
                         count=admin_bulk_update_product_costs_prices(u,form); msg=f'Bulk stock update completed. {count} product(s) changed; all edits saved together.'
+                    elif action=='edit_name':
+                        if role_name(u)!='ADMIN': raise PermissionError('Only the Administrator can change product names.')
+                        admin_update_product_name(u,form); msg='Product name updated successfully.'
                     elif action=='edit':
                         admin_update_product(u,form); msg='Product changes saved successfully.'
                     elif action=='stock':
@@ -3732,6 +3755,9 @@ def do_POST(self):
                 action=form.get('action','create')
                 if action=='create': save_product(u,form); msg='Product saved successfully. Product registered successfully.'
                 elif action=='bulk_save': count=admin_bulk_update_product_costs_prices(u,form); msg=f'Bulk stock update completed. {count} product(s) changed; all edits saved together.'
+                elif action=='edit_name':
+                    if role_name(u)!='ADMIN': raise PermissionError('Only the Administrator can change product names.')
+                    admin_update_product_name(u,form); msg='Product name updated successfully.'
                 elif action=='edit': admin_update_product(u,form); msg='Product changes saved successfully.'
                 elif action=='stock': admin_set_stock(u,form); msg='Stock correction saved successfully.'
                 elif action=='delete': admin_product_delete(u,form.get('product_id'),False,form.get('reason','')); msg='Product deleted/archived successfully.'
