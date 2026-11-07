@@ -3314,7 +3314,7 @@ def cash_paybill_transfer_page(u,message=''):
     rendered=[]
     for r in rows:
         action=f'<span class="pill">{esc(r["status"])}</span>'
-        if r['status']=='PENDING' and role in ('ADMIN','MANAGEMENT') and int(r['requested_by'])!=int(u['id']):
+        if r['status']=='PENDING' and role in ('ADMIN','MANAGEMENT') and (role=='ADMIN' or int(r['requested_by'])!=int(u['id'])):
             action=f'''<details><summary class="btn gold">REVIEW</summary><div class="card" style="min-width:250px;margin-top:8px">
             <form method="post" action="/cash-paybill-transfer" onsubmit="return confirm('Approve only after verifying the actual Paybill deposit. Continue?')">{csrf_input(CURRENT_HANDLER)}
             <input type="hidden" name="action" value="approve"><input type="hidden" name="request_id" value="{r["id"]}">
@@ -3535,8 +3535,8 @@ class Handler(BaseHTTPRequestHandler):
                                 raise ValueError('Transfer request was not found.')
                             if row['status']!='PENDING':
                                 raise ValueError('This request has already been reviewed and cannot be posted again.')
-                            if int(row['requested_by'])==int(u['id']):
-                                raise PermissionError('You cannot approve your own transfer request.')
+                            if role!='ADMIN' and int(row['requested_by'])==int(u['id']):
+                                raise PermissionError('Management cannot approve its own transfer request. Administrator override is permitted.')
                             review_note=str(form.get('review_note','')).strip()
                             if action=='reject':
                                 if len(review_note)<5:
