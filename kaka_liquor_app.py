@@ -4049,6 +4049,11 @@ def do_POST(self):
             return send_json(self, {'error':str(e) or 'Please sign in again.'}, 401)
         except Exception as e:
             return send_json(self, {'error':str(e) or 'Unable to update credit payment. Please check the invoice before retrying.'}, 500)
+    # Delegate the Cash/Paybill transfer forms to the original dispatcher
+    # before this newer handler consumes the POST body. These workflows were
+    # omitted from the replacement dispatcher, causing a false 404.
+    if path in ('/cash-paybill-transfer','/paybill-cash-transfer'):
+        return old_do_post(self)
     try:
         branch_callback=re.fullmatch(r'/api/mpesa/branch/(\d+)/(stk/callback|c2b/confirmation|c2b/validation)',path)
         if path in ('/api/mpesa/stk/callback','/api/mpesa/c2b/confirmation','/api/mpesa/c2b/validation') or branch_callback:
