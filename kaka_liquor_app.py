@@ -1157,10 +1157,11 @@ def dashboard_greeting(u):
     hour=core.now().hour
     if 5 <= hour < 12:
         greeting='Good morning'
-    elif 12 <= hour < 18:
+    elif 12 <= hour < 17:
         greeting='Good afternoon'
     else:
-        # Use Good evening as a greeting at night; Good night is usually a farewell.
+        # Kenyan local time: from 5:00 PM onward, greet users with Good evening,
+        # including at night. Good night is reserved for a farewell.
         greeting='Good evening'
     full=str(u.get('full_name') or u.get('username') or '').strip()
     display_name=full or 'User'
