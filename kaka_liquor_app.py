@@ -384,6 +384,7 @@ def layout(u, title, content, active='', subtitle='Business control center'):
         if role=='MANAGEMENT':
             if allowed(u,'VIEW_REPORTS'): nav.append(('Branch Performance','/branch-performance'))
     nav.append(('Cash → Paybill Requests','/cash-paybill-transfer'))
+    nav.append(('Paybill → Cash Requests','/paybill-cash-transfer'))
     nav_html=''.join(page_link(label,href,active) for label,href in nav)
     home_href='/' if dashboard_enabled and allowed(u,'VIEW_DASHBOARD') else '/sales'
     role_label={'ADMIN':setting_label('role_admin_label','ADMINISTRATOR / DEVELOPER'),'MANAGEMENT':setting_label('role_management_label','MANAGEMENT'),'SALES':setting_label('role_sales_label','SALES PERSON')}.get(role,role)
@@ -2740,6 +2741,15 @@ def ensure_cash_paybill_schema():
             reviewed_by INTEGER REFERENCES users(id), reviewed_at TEXT, review_note TEXT NOT NULL DEFAULT '',
             transfer_no TEXT UNIQUE, posted_at TEXT)""")
         c.execute("CREATE INDEX IF NOT EXISTS idx_cash_paybill_req_branch_status ON cash_paybill_requests(branch_id,status,requested_at)")
+        c.execute("""CREATE TABLE IF NOT EXISTS paybill_cash_requests(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, request_no TEXT NOT NULL UNIQUE,
+            branch_id INTEGER NOT NULL REFERENCES branches(id), amount REAL NOT NULL CHECK(amount>0),
+            note TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','APPROVED','REJECTED')),
+            requested_by INTEGER NOT NULL REFERENCES users(id), requested_at TEXT NOT NULL,
+            reviewed_by INTEGER REFERENCES users(id), reviewed_at TEXT, review_note TEXT NOT NULL DEFAULT '',
+            withdrawal_reference TEXT NOT NULL DEFAULT '', posted_at TEXT)""")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_paybill_cash_req_status ON paybill_cash_requests(status,requested_at)")
+
         c.commit()
     finally:
         c.close()
@@ -2788,6 +2798,128 @@ def cash_paybill_transfer_page(u, message=''):
     table=html_table(['Request','Date','Branch','Amount','Requested By','Deposit Ref.','Reason','Status','Reviewed By','Reviewed At','Action / Note'],items,'No transfer requests yet.')
     note='<div class="notice">Only Management or Administrator can approve or reject. Approval rechecks branch cash and posts equal Cash OUT and Paybill IN entries once only. Transfers are not income or expenses.</div>'
     return layout(u,'Cash → Paybill Requests',notice+form+note+f'<section class="card" style="margin-top:14px"><h2>Transfer Requests</h2>{table}</section>','/cash-paybill-transfer','Request and approve branch cash deposits to Paybill')
+
+
+def paybill_cash_transfer_page(u, message=''):
+    ensure_cash_paybill_schema()
+    role=role_name(u)
+    c=core.db.c()
+    try:
+        branches=[dict(x) for x in c.execute("SELECT id,name FROM branches WHERE active=1 ORDER BY name").fetchall()]
+        if role in ('ADMIN','MANAGEMENT'):
+            rows=c.execute("""SELECT r.*,b.name branch_name,ru.full_name requester,COALESCE(vu.full_name,'') reviewer
+                FROM paybill_cash_requests r JOIN branches b ON b.id=r.branch_id
+                JOIN users ru ON ru.id=r.requested_by LEFT JOIN users vu ON vu.id=r.reviewed_by
+                ORDER BY CASE WHEN r.status='PENDING' THEN 0 ELSE 1 END,r.id DESC LIMIT 250""").fetchall()
+        else:
+            bid=int(u.get('branch_id') or 0)
+            if not bid: raise PermissionError('Your account has no assigned branch. Contact Administrator.')
+            rows=c.execute("""SELECT r.*,b.name branch_name,ru.full_name requester,COALESCE(vu.full_name,'') reviewer
+                FROM paybill_cash_requests r JOIN branches b ON b.id=r.branch_id
+                JOIN users ru ON ru.id=r.requested_by LEFT JOIN users vu ON vu.id=r.reviewed_by
+                WHERE r.branch_id=? ORDER BY r.id DESC LIMIT 200""",(bid,)).fetchall()
+    finally:
+        c.close()
+    notice=f'<div class="flash error">{esc(message)}</div>' if message else ''
+    if role in ('ADMIN','MANAGEMENT'):
+        opts='<option value="">SELECT BRANCH</option>'+''.join(f'<option value="{int(b["id"])}">{esc(b["name"])}</option>' for b in branches)
+        branch_field=f'<div><label>Branch receiving cash *</label><select name="branch_id" required>{opts}</select></div>'
+    else:
+        bid=int(u.get('branch_id') or 0)
+        bname=next((b['name'] for b in branches if int(b['id'])==bid),'Unassigned')
+        branch_field=f'<input type="hidden" name="branch_id" value="{bid}"><div><label>Your assigned branch</label><input value="{esc(bname)}" readonly></div>'
+    form=f'''<section class="card"><h2>Request Paybill → Cash Transfer</h2>
+    <p class="muted">Requesting does not change balances. Management or Administrator must approve after verifying the Paybill withdrawal. Approval posts Paybill OUT and branch Cash IN.</p>
+    <form method="post" action="/paybill-cash-transfer" class="form-grid">{csrf_input(CURRENT_HANDLER)}
+    <input type="hidden" name="action" value="request">{branch_field}
+    <div><label>Amount (KSh) *</label><input type="number" name="amount" min="0.01" step="0.01" required></div>
+    <div style="grid-column:1/-1"><label>Reason *</label><input name="note" minlength="5" maxlength="250" required></div>
+    <div class="actions"><button class="btn gold">SUBMIT REQUEST</button></div></form></section>'''
+    items=[]
+    for r in rows:
+        action=''
+        if role in ('ADMIN','MANAGEMENT') and r['status']=='PENDING' and int(r['requested_by'])!=int(u['id']):
+            action=f'''<details><summary class="btn gold">REVIEW</summary><form method="post" action="/paybill-cash-transfer" class="card" style="margin-top:8px">{csrf_input(CURRENT_HANDLER)}
+            <input type="hidden" name="action" value="approve"><input type="hidden" name="request_id" value="{int(r['id'])}">
+            <label>Verified Paybill withdrawal reference *</label><input name="withdrawal_reference" minlength="8" maxlength="15" pattern="[A-Za-z0-9]{{8,15}}" required>
+            <label>Approval note</label><input name="review_note" maxlength="200">
+            <button class="btn gold">APPROVE &amp; POST</button></form>
+            <form method="post" action="/paybill-cash-transfer" style="margin-top:6px">{csrf_input(CURRENT_HANDLER)}
+            <input type="hidden" name="action" value="reject"><input type="hidden" name="request_id" value="{int(r['id'])}">
+            <label>Rejection reason *</label><input name="review_note" minlength="5" required><button class="btn danger">REJECT</button></form></details>'''
+        items.append([esc(r['request_no']),esc(r['requested_at']),esc(r['branch_name']),money(r['amount']),esc(r['requester']),esc(r['withdrawal_reference'] or '—'),esc(r['status']),esc(r['reviewer'] or '—'),action or esc(r['review_note'] or '—')])
+    table=html_table(['Request','Date','Branch','Amount','Requested By','Withdrawal Ref.','Status','Reviewed By','Action / Note'],items,'No Paybill-to-Cash requests recorded.')
+    note='<div class="notice">Only Management or Administrator can approve/reject. Approval checks the available Paybill balance and records equal Paybill OUT and branch Cash IN. This is an internal record; it does not initiate a Safaricom withdrawal.</div>'
+    return layout(u,'Paybill → Cash Requests',notice+form+note+f'<section class="card" style="margin-top:14px"><h2>Transfer Requests</h2>{table}</section>','/paybill-cash-transfer','Request and approve Paybill withdrawals into branch cash')
+
+
+def paybill_cash_transfer_post(u, form):
+    ensure_cash_paybill_schema()
+    role=role_name(u)
+    action=str(form.get('action','request')).lower()
+    c=core.db.c()
+    try:
+        c.execute('BEGIN IMMEDIATE')
+        ts=now()
+        if action=='request':
+            submitted_branch=int(form.get('branch_id','0') or 0)
+            branch_id=int(u.get('branch_id') or 0) if role=='SALES' else submitted_branch
+            amount=round(float(form.get('amount','0') or 0),2)
+            note=str(form.get('note','')).strip()
+            if amount<=0 or len(note)<5: raise ValueError('Enter a positive amount and a reason of at least 5 characters.')
+            if role=='SALES' and submitted_branch!=branch_id: raise PermissionError('Salespeople can request transfers only for their assigned branch.')
+            if role not in ('ADMIN','MANAGEMENT','SALES'): raise PermissionError('You are not allowed to request this transfer.')
+            branch=c.execute('SELECT id,name FROM branches WHERE id=? AND active=1',(branch_id,)).fetchone()
+            if not branch: raise ValueError('Select an active registered branch.')
+            request_no='PBC-REQ-'+dt.datetime.now().strftime('%Y%m%d%H%M%S')+'-'+secrets.token_hex(3).upper()
+            c.execute("""INSERT INTO paybill_cash_requests(request_no,branch_id,amount,note,status,requested_by,requested_at)
+                VALUES(?,?,?,?,'PENDING',?,?)""",(request_no,branch_id,amount,note,u['id'],ts))
+            core.db.audit(c,u,'PAYBILL_TO_CASH_REQUEST','PAYBILL_CASH_REQUEST',request_no,f'branch={branch["name"]}; amount={amount:.2f}; status=PENDING; balances_unchanged')
+            c.commit()
+            add_flash(session_token(CURRENT_HANDLER),f'Request {request_no} submitted as PENDING. No balances have changed.','success')
+        elif action in ('approve','reject'):
+            if role not in ('ADMIN','MANAGEMENT'): raise PermissionError('Only Management or Administrator can approve or reject.')
+            request_id=int(form.get('request_id','0') or 0)
+            row=c.execute('SELECT r.*,b.name branch_name FROM paybill_cash_requests r JOIN branches b ON b.id=r.branch_id WHERE r.id=?',(request_id,)).fetchone()
+            if not row: raise ValueError('Paybill-to-Cash request was not found.')
+            if row['status']!='PENDING': raise ValueError('This request has already been reviewed.')
+            if int(row['requested_by'])==int(u['id']): raise PermissionError('You cannot approve your own request.')
+            review_note=str(form.get('review_note','')).strip()
+            if action=='reject':
+                if len(review_note)<5: raise ValueError('Enter a rejection reason of at least 5 characters.')
+                c.execute("UPDATE paybill_cash_requests SET status='REJECTED',reviewed_by=?,reviewed_at=?,review_note=? WHERE id=? AND status='PENDING'",(u['id'],ts,review_note,request_id))
+                core.db.audit(c,u,'PAYBILL_TO_CASH_REJECT','PAYBILL_CASH_REQUEST',row['request_no'],f'branch={row["branch_name"]}; reason={review_note}')
+                c.commit()
+                add_flash(session_token(CURRENT_HANDLER),f'Request {row["request_no"]} rejected. Balances unchanged.','success')
+            else:
+                amount=round(float(row['amount']),2)
+                available=financial_statement_data('PAYBILL','1900-01-01 00:00:00','2999-12-31 23:59:59',None,c)['closing']
+                if amount>available: raise ValueError(f'Insufficient recorded Paybill balance. Available: {money(available)}. Request remains pending.')
+                ref=str(form.get('withdrawal_reference','')).strip().upper()
+                if not re.fullmatch(r'[A-Z0-9]{8,15}',ref): raise ValueError('Enter a verified withdrawal reference (8–15 letters or numbers).')
+                duplicate=c.execute("""SELECT 1 FROM mpesa_transactions WHERE UPPER(COALESCE(trans_id,''))=?
+                    UNION ALL SELECT 1 FROM financial_manual_entries WHERE UPPER(reference)=?""",(ref,ref)).fetchone()
+                if duplicate: raise ValueError('This withdrawal reference has already been recorded.')
+                request_ref=row['request_no']
+                description=f'Paybill withdrawal to branch cash; external reference {ref}; request {request_ref}'
+                c.execute("""INSERT INTO financial_manual_entries(account,branch_id,direction,amount,reference,description,occurred_at,created_at,created_by)
+                    VALUES('PAYBILL',NULL,'OUT',?,?,?,?,?,?)""",(amount,request_ref+'-PAYBILL',description,ts,ts,u['id']))
+                c.execute("""INSERT INTO financial_manual_entries(account,branch_id,direction,amount,reference,description,occurred_at,created_at,created_by)
+                    VALUES('CASH',?,'IN',?,?,?,?,?,?)""",(int(row['branch_id']),amount,request_ref+'-CASH',description,ts,ts,u['id']))
+                cur=c.execute("""UPDATE paybill_cash_requests SET status='APPROVED',reviewed_by=?,reviewed_at=?,review_note=?,withdrawal_reference=?,posted_at=?
+                    WHERE id=? AND status='PENDING'""",(u['id'],ts,review_note,ref,ts,request_id))
+                if cur.rowcount!=1: raise ValueError('This request was already processed; no duplicate transfer was posted.')
+                core.db.audit(c,u,'PAYBILL_TO_CASH_APPROVE','PAYBILL_CASH_REQUEST',request_ref,f'branch={row["branch_name"]}; amount={amount:.2f}; withdrawal_reference={ref}; Paybill OUT={amount:.2f}; Cash IN={amount:.2f}')
+                c.commit()
+                add_flash(session_token(CURRENT_HANDLER),f'Request {request_ref} approved. Paybill decreased and branch cash increased by {money(amount)}.','success')
+        else:
+            raise ValueError('Unknown Paybill-to-Cash request action.')
+    except Exception:
+        c.rollback()
+        raise
+    finally:
+        c.close()
+    return redirect(CURRENT_HANDLER,'/paybill-cash-transfer')
 
 
 def financials_page(u, query=None, message=''):
@@ -3304,6 +3436,7 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/mpesa/stk-status': return send_json(self,mpesa_stk_status(_qsval(qs,'checkout_request_id'),u,qs))
             if path=='/api/mpesa/live-messages': return send_json(self,mpesa_live_messages_json(u,qs))
             if path=='/cash-paybill-transfer': return send_html(self,cash_paybill_transfer_page(u))
+            if path=='/paybill-cash-transfer': return send_html(self,paybill_cash_transfer_page(u))
             if path=='/financials':
                 if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
                 return send_html(self,financials_page(u,qs))
@@ -3359,6 +3492,12 @@ class Handler(BaseHTTPRequestHandler):
                     return redirect(self,'/financials')
                 except Exception as e:
                     return send_html(self,financials_page(u,message=str(e)),400)
+            if path=='/paybill-cash-transfer':
+                try:
+                    paybill_cash_transfer_post(u,form)
+                    return redirect(self,'/paybill-cash-transfer')
+                except Exception as e:
+                    return send_html(self,paybill_cash_transfer_page(u,str(e)),400)
             if path=='/cash-paybill-transfer':
                 try:
                     ensure_cash_paybill_schema()
