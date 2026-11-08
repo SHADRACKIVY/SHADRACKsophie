@@ -468,7 +468,7 @@ def effective_permissions(u):
     for r in rows:
         base[r['key']]=bool(r['enabled'])
     c.close()
-    return {k:bool(base.get(k,False)) for k in all_keys}
+    return {k:(True if k=='CREDIT_SALES' else bool(base.get(k,False))) for k in all_keys}
 
 MANAGEMENT_REPORT_KEYS=set()  # Legacy compatibility; Administrator controls all permissions.
 
