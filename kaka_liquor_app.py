@@ -3615,7 +3615,7 @@ class Handler(BaseHTTPRequestHandler):
                     if not customer: raise ValueError('Customer not found.')
                     outstanding=c.execute("SELECT COUNT(*) n,COALESCE(SUM(MAX(ca.principal-ca.paid_amount,0)),0) balance FROM credit_accounts ca WHERE ca.customer_id=? AND ca.status='OPEN' AND ca.principal-ca.paid_amount>0.009",(customer_id,)).fetchone()
                     if int(outstanding['n'] or 0)>0: raise ValueError(f'Cannot delete {customer["full_name"]}: outstanding credit balance {money(outstanding["balance"])}. Settle the invoices first.')
-                    c.execute('UPDATE customers SET active=0,updated_at=? WHERE id=?',(now_str(),customer_id))
+                    c.execute('UPDATE customers SET active=0,updated_at=? WHERE id=?',(now(),customer_id))
                     core.db.audit(c,u,'ARCHIVE','CUSTOMER',customer_id,f'name={customer["full_name"]}; historical invoices and repayments preserved')
                     c.commit()
                 except Exception:
@@ -3637,11 +3637,11 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     existing=c.execute('SELECT id FROM suppliers WHERE name=? COLLATE NOCASE',(name,)).fetchone()
                     if existing:
-                        c.execute('UPDATE suppliers SET phone=?,email=?,location=?,notes=?,active=1,updated_at=?,created_by=COALESCE(created_by,?) WHERE id=?',(phone,email,location,notes,now_str(),u['id'],existing['id']))
+                        c.execute('UPDATE suppliers SET phone=?,email=?,location=?,notes=?,active=1,updated_at=?,created_by=COALESCE(created_by,?) WHERE id=?',(phone,email,location,notes,now(),u['id'],existing['id']))
                         msg=f'Supplier {name} already existed; its details have been updated.'
                         core.db.audit(c,u,'UPDATE','SUPPLIER',existing['id'],f'name={name}')
                     else:
-                        cur=c.execute('INSERT INTO suppliers(name,phone,email,location,notes,active,created_at,updated_at,created_by) VALUES(?,?,?,?,?,1,?,?,?)',(name,phone,email,location,notes,now_str(),now_str(),u['id']))
+                        cur=c.execute('INSERT INTO suppliers(name,phone,email,location,notes,active,created_at,updated_at,created_by) VALUES(?,?,?,?,?,1,?,?,?)',(name,phone,email,location,notes,now(),now(),u['id']))
                         core.db.audit(c,u,'CREATE','SUPPLIER',cur.lastrowid,f'name={name}; phone={phone}')
                         msg=f'Supplier {name} registered successfully and is now available on Purchases.'
                     c.commit()
