@@ -390,6 +390,10 @@ def layout(u, title, content, active='', subtitle='Business control center'):
     nav.append(('Cash → Paybill Requests','/cash-paybill-transfer'))
     nav.append(('Paybill → Cash Requests','/paybill-cash-transfer'))
     nav_html=''.join(page_link(label,href,active) for label,href in nav)
+    _session_entry=SESSIONS.get(session_token(CURRENT_HANDLER),{}) if CURRENT_HANDLER else {}
+    _switch_banner=''
+    if _session_entry.get('admin_uid'):
+        _switch_banner=f'''<section class="card" style="border:2px solid #c99635;margin-bottom:12px"><strong>ADMINISTRATOR ACCOUNT SWITCH</strong><div class="muted">You are currently working as {esc(u.get('full_name'))} ({esc(role_display(role))}). All actions are subject to this account's normal permissions and branch restrictions.</div><form method="post" action="/admin/return-user" style="margin-top:8px">{csrf_input(CURRENT_HANDLER)}<button class="btn gold" type="submit">RETURN TO ADMINISTRATOR ACCOUNT</button></form></section>'''
     home_href='/' if dashboard_enabled and allowed(u,'VIEW_DASHBOARD') else '/sales'
     role_label={'ADMIN':setting_label('role_admin_label','ADMINISTRATOR / DEVELOPER'),'MANAGEMENT':setting_label('role_management_label','MANAGEMENT'),'SALES':setting_label('role_sales_label','SALES PERSON')}.get(role,role)
     idle_ms=int(float(settings.get('idle_timeout_minutes','2'))*60*1000)
@@ -419,6 +423,7 @@ def layout(u, title, content, active='', subtitle='Business control center'):
     except Exception:
         try: cc.close()
         except Exception: pass
+    content=_switch_banner+content
     return f'''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#123c31"><link rel="manifest" href="/manifest.json"><link rel="icon" href="/business-logo"><title>{esc(title)} · {esc(name)}</title><style>{CSS}</style></head><body><header class="mobile-head"><div class="brand-mini"><img src="/business-logo"> <span>{esc(name)}</span></div><button class="menu" type="button" onclick="document.body.classList.toggle('open-nav')">☰</button></header><aside class="sidebar"><div class="brand"><img src="/business-logo"><span><b>{esc(name)}</b><small>{esc(branch or business_subtitle)}</small></span></div><nav>{nav_html}</nav><div class="side-bottom"><div class="userbox"><b>{esc(u.get('full_name',''))}</b><span>@{esc(u.get('username',''))}</span><span>{esc(role_label)}</span></div><a class="nav" href="/change-password">Change Password</a><a class="nav logout" href="/logout">LOG OUT</a></div></aside><main><header class="topbar"><div><h1>{esc(title)}</h1><div class="welcome-greeting" style="font-weight:800;color:var(--gold);margin:3px 0 5px">{esc(dashboard_greeting(u))}</div><p class="muted">{esc(name)} · {esc(business_subtitle)} · {esc(subtitle)}</p></div><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><button class="btn gold install-app-btn" id="install-app-btn" type="button">INSTALL APP</button><div class="clock" id="clock"></div></div></header><div class="actions movement-controls" aria-label="Page navigation"><a class="btn" href="{home_href}">⌂ HOME</a><button class="btn" type="button" onclick="if(history.length>1){{history.back()}}else{{location.href='{home_href}'}}">← BACK</button><a class="btn" href="{home_href}" onclick="return confirm('Cancel this screen and return to the home screen? Unsaved form changes will be lost.')">✕ CANCEL</a></div>{flash_html(handler=None)}{credit_alert_html}{content}<footer class="app-powered">Powered by SHADYTECHSOLUTIONS @2026</footer></main>{SCANNER_MODAL}<script>{PRODUCT_SEARCH_JS}</script><script>{SCANNER_JS}</script><script>{INSTALL_JS}</script><script>(function(){{function tick(){{var e=document.getElementById('clock');if(e)e.textContent=new Date().toLocaleString('en-KE',{{timeZone:'Africa/Nairobi',dateStyle:'medium',timeStyle:'medium'}})}}tick();setInterval(tick,1000);var mpesaPollSeconds={refresh_s},currencySymbol={json.dumps(settings.get('currency','KSh'))};function paintMpesaLive(payload){{var box=document.getElementById('mpesa-live-messages');if(!box||!payload)return;var items=payload.messages||[];if(!items.length){{box.innerHTML='<div class="mpesa-live-empty">Waiting for M-Pesa payment messages…</div>';return;}}box.innerHTML=items.map(function(i){{var safeTitle=String(i.title||'M-PESA PAYMENT').replace(/[&<>\"]/g,function(c){{return {{'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}}[c]}});return '<div class="mpesa-live-item"><span class="mpesa-live-dot '+(i.source==='C2B'?'pulse':'')+'"></span><div class="mpesa-live-main"><b>'+safeTitle+'</b><span>'+String(i.ts||'')+' · '+String(i.detail||'')+'</span></div><span class="mpesa-live-amt">'+currencySymbol+' '+Number(i.amount||0).toLocaleString('en-KE',{{minimumFractionDigits:2,maximumFractionDigits:2}})+'</span></div>'}}).join('')}};function pollMpesaLive(){{var box=document.getElementById('mpesa-live-messages');if(!box)return;fetch('/api/mpesa/live-messages'+(location.search||''),{{cache:'no-store',credentials:'same-origin'}}).then(function(r){{if(r.status===401){{location.href='/login';return null;}}return r.ok?r.json():null;}}).then(paintMpesaLive).catch(function(){{}})}};if(document.getElementById('mpesa-live-messages')){{pollMpesaLive();setInterval(pollMpesaLive,Math.max(2,mpesaPollSeconds)*1000);}}var idleMs={idle_ms},lastActivity=Date.now();function touch(){{lastActivity=Date.now()}};['click','keydown','touchstart','input','change','scroll'].forEach(function(ev){{document.addEventListener(ev,touch,{{passive:true}})}});setInterval(function(){{if(Date.now()-lastActivity>=idleMs){{location.href='/logout?auto=1'}}}},1000);}})();</script></body></html>'''
 
 FLASH = {}
@@ -1748,7 +1753,8 @@ def users_page(u, message=''):
         reset=f'''<form method="post" action="/users" class="inline-actions">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="reset_password"><input type="hidden" name="user_id" value="{r['id']}"><input type="password" name="new_password" minlength="8" placeholder="New password" required style="width:135px"><button class="btn gold">RESET PASSWORD</button></form>'''
         toggle=f'''<form method="post" action="/users" class="inline-actions">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="toggle"><input type="hidden" name="user_id" value="{r['id']}"><input type="hidden" name="active" value="{0 if r['active'] else 1}"><button class="btn {'danger' if r['active'] else ''}">{'RESTRICT ACCESS' if r['active'] else 'ENABLE ACCESS'}</button></form>'''
         delete='' if r['id']==u['id'] else f'''<form method="post" action="/users" class="inline-actions" onsubmit="return confirm('Delete this user? Historical records are retained; users with history will be disabled instead of physically removed.');">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="delete"><input type="hidden" name="user_id" value="{r['id']}"><button class="btn danger">DELETE USER</button></form>'''
-        table.append([esc(r['username']),esc(r['full_name']),esc(role_display(r['access_role'])),esc(r['branch_name']),status,esc(r['created_at']),edit+'<div style="margin-top:6px">'+reset+'</div><div style="margin-top:6px">'+toggle+delete+'</div>'])
+        switch_form=f'''<form method="post" action="/admin/switch-user" class="inline-actions" onsubmit="return confirm('Switch into {html.escape(str(r['username']),quote=True)}? You will work with this account\'s role and branch permissions.');">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="user_id" value="{int(r['id'])}"><button class="btn gold" type="submit">SWITCH INTO ACCOUNT</button></form>''' if r['active'] and r['id']!=u['id'] and r['access_role']!='ADMIN' else ''
+        table.append([esc(r['username']),esc(r['full_name']),esc(role_display(r['access_role'])),esc(r['branch_name']),status,esc(r['created_at']),edit+'<div style="margin-top:6px">'+reset+'</div><div style="margin-top:6px">'+toggle+delete+switch_form+'</div>'])
     content=f'''{notice}<section class="card"><div class="section-head"><h2>User Management & Access Control</h2><span class="pill">ADMINISTRATOR / DEVELOPER ONLY</span></div><form method="post" action="/users">{csrf_input(CURRENT_HANDLER)}<input type="hidden" name="action" value="create"><div class="form-grid"><div><label>Username</label><input name="username" required></div><div><label>Full Name</label><input name="full_name" required></div><div><label>Password</label><input type="password" name="password" minlength="8" required></div><div><label>Role</label><select name="role" id="new-user-role" required><option value="SALES">{esc(setting_label('role_sales_label','SALES PERSON'))}</option><option value="MANAGEMENT">{esc(setting_label('role_management_label','MANAGEMENT'))}</option><option value="ADMIN">{esc(setting_label('role_admin_label','ADMINISTRATOR / DEVELOPER'))}</option></select></div><div><label>Assigned Branch <span class="muted">(required for Sales Person)</span></label><select name="branch_id" id="new-user-branch"><option value="">Select branch</option>{opts}</select></div></div><div class="actions" style="margin-top:14px"><button class="btn gold">ADD USER</button></div></form><script>(function(){{var r=document.getElementById('new-user-role'),b=document.getElementById('new-user-branch');function sync(){{b.required=r.value==='SALES';}}r.addEventListener('change',sync);sync();}})();</script></section><section class="card" style="margin-top:14px"><div class="notice">Every Sales Person must have an active branch. Sales are recorded against the assigned branch at the time of sale, preserving historical branch performance when staff later move branches.</div>{html_table(['Username','Full Name','Role','Branch','Status','Created','Administrator Controls'],table,'No users.')}</section>'''
     return layout(u,'User Management',content,'/users','Roles, branch assignments and access control')
 
@@ -4099,6 +4105,43 @@ def do_POST(self):
             form,self._multipart_upload=parse_multipart_form(self)
         else:
             form=parse_form(self)
+        if path in ('/admin/switch-user','/admin/return-user'):
+            token=session_token(self); entry=SESSIONS.get(token,{})
+            admin_id=int(entry.get('admin_uid') or entry.get('uid') or 0)
+            if not token or not check_csrf(self,form):
+                return send_html(self,error_page('Your session or security token expired. Please refresh and sign in again.',400),400)
+            c=core.db.c()
+            try:
+                admin_row=c.execute('SELECT * FROM users WHERE id=? AND active=1',(admin_id,)).fetchone()
+                if not admin_row or role_name(dict(admin_row))!='ADMIN':
+                    raise PermissionError('Only the original Administrator can switch user accounts.')
+                admin_user=dict(admin_row)
+                if path=='/admin/switch-user':
+                    target_id=int(form.get('user_id','0') or 0)
+                    target=c.execute('SELECT * FROM users WHERE id=? AND active=1',(target_id,)).fetchone()
+                    if not target: raise ValueError('The selected account is not active or does not exist.')
+                    target=dict(target)
+                    if role_name(target)=='ADMIN': raise ValueError('Switching into another Administrator account is disabled. Use the Administrator login directly.')
+                    entry['admin_uid']=admin_id
+                    entry['uid']=target_id
+                    entry['last_activity']=time.time()
+                    core.db.audit(c,admin_user,'ADMIN_SWITCH_USER','USER',target_id,f"Administrator switched into {target['username']} ({role_name(target)}); original_admin_id={admin_id}")
+                    c.commit()
+                    return redirect(self,'/')
+                else:
+                    if not entry.get('admin_uid'): raise PermissionError('You are not currently switched into another account.')
+                    target_id=int(entry.get('uid') or 0)
+                    core.db.audit(c,admin_user,'ADMIN_RETURN_FROM_USER','USER',target_id,f"Administrator returned from switched account; original_admin_id={admin_id}")
+                    entry['uid']=admin_id
+                    entry.pop('admin_uid',None)
+                    entry['last_activity']=time.time()
+                    c.commit()
+                    return redirect(self,'/users')
+            except Exception as e:
+                c.rollback()
+                return send_html(self,error_page(str(e),403 if isinstance(e,PermissionError) else 400),403 if isinstance(e,PermissionError) else 400)
+            finally:
+                c.close()
         if path=='/login': return self.login_post(form)
         u=require_user(self)
         billing=subscription_billing_state()
