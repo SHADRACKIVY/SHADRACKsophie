@@ -4082,7 +4082,7 @@ def do_POST(self):
     # Delegate the Cash/Paybill transfer forms to the original dispatcher
     # before this newer handler consumes the POST body. These workflows were
     # omitted from the replacement dispatcher, causing a false 404.
-    if path in ('/cash-paybill-transfer','/paybill-cash-transfer'):
+    if path in ('/cash-paybill-transfer','/paybill-cash-transfer','/customers/delete'):
         return old_do_post(self)
     try:
         branch_callback=re.fullmatch(r'/api/mpesa/branch/(\d+)/(stk/callback|c2b/confirmation|c2b/validation)',path)
