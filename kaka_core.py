@@ -590,20 +590,42 @@ def create_sale(u, data):
         customer_id=None; ctype='WALK_IN'
         if customer.get('id'):
             cr=c.execute('SELECT * FROM customers WHERE id=? AND active=1',(int(customer['id']),)).fetchone()
-            if not cr: raise ValueError('Customer not found.')
-            if str(u.get('access_role') or u.get('role') or '').upper()=='SALES' and int(cr['branch_id'] or 0)!=int(branch_id):
-                raise ValueError('This customer belongs to another branch or has not been assigned to a branch. Ask Administrator to correct the customer record.')
+            if not cr: raise ValueError('Customer not found or archived.')
+            customer_branch=int(cr['branch_id'] or 0)
+            if customer_branch==0:
+                c.execute('UPDATE customers SET branch_id=?,updated_at=? WHERE id=?',(branch_id,now_str(),cr['id']))
+            elif role not in ('ADMIN','MANAGEMENT') and customer_branch!=int(branch_id):
+                raise ValueError('This customer is registered under another branch. Ask Management to review the customer branch assignment.')
             customer_id=cr['id']; ctype='REGISTERED'
         elif customer.get('full_name') and customer.get('phone') and customer.get('id_no'):
             name=str(customer['full_name']).strip(); phone=str(customer['phone']).strip(); id_no=str(customer['id_no']).strip(); address=str(customer.get('address','') or '').strip()
-            duplicate=c.execute("""SELECT id,full_name,phone,id_no FROM customers WHERE active=1 AND (
-                lower(trim(id_no))=lower(trim(?)) OR
-                replace(replace(replace(phone,' ',''),'-',''),'+','')=replace(replace(replace(?,' ',''),'-',''),'+','')
-            ) ORDER BY id LIMIT 1""",(id_no,phone)).fetchone()
+            # National ID/passport is the primary identity. Reuse a matching customer
+            # in this branch instead of reporting a duplicate that cannot be selected.
+            duplicate=c.execute("SELECT * FROM customers WHERE active=1 AND lower(trim(COALESCE(id_no,'')))=lower(trim(?)) ORDER BY id LIMIT 1",(id_no,)).fetchone()
             if duplicate:
-                raise ValueError(f'Customer already registered: {duplicate["full_name"]} · Phone {duplicate["phone"]}. Select EXISTING CUSTOMER and search by ID or phone. No duplicate was created.')
-            no='CUS-'+now().strftime('%Y%m%d%H%M%S')+'-'+secrets.token_hex(2).upper(); ts=now_str()
-            cur=c.execute('INSERT INTO customers(customer_no,full_name,phone,id_no,address,created_at,updated_at,branch_id) VALUES(?,?,?,?,?,?,?,?)',(no,name,phone,id_no,address,ts,ts,branch_id)); customer_id=cur.lastrowid; ctype='REGISTERED'
+                duplicate_branch=int(duplicate['branch_id'] or 0)
+                if duplicate_branch==0:
+                    c.execute('UPDATE customers SET branch_id=?,updated_at=? WHERE id=?',(branch_id,now_str(),duplicate['id']))
+                elif role not in ('ADMIN','MANAGEMENT') and duplicate_branch!=int(branch_id):
+                    raise ValueError('This ID/passport is already registered under another branch. Ask Management to review the customer branch assignment.')
+                customer_id=duplicate['id']; ctype='REGISTERED'
+            else:
+                # Phone is unique in the current database. If it is already attached
+                # to a customer, return an actionable message rather than a misleading
+                # generic duplicate error. Search can find that record in this branch.
+                phone_match=c.execute("SELECT * FROM customers WHERE active=1 AND replace(replace(replace(phone,' ',''),'-',''),'+','')=replace(replace(replace(?,' ',''),'-',''),'+','') ORDER BY id LIMIT 1",(phone,)).fetchone()
+                if phone_match:
+                    match_branch=int(phone_match['branch_id'] or 0)
+                    if match_branch==0:
+                        c.execute('UPDATE customers SET branch_id=?,updated_at=? WHERE id=?',(branch_id,now_str(),phone_match['id']))
+                        customer_id=phone_match['id']; ctype='REGISTERED'
+                    elif match_branch==int(branch_id) or role in ('ADMIN','MANAGEMENT'):
+                        raise ValueError(f'This phone number is already linked to {phone_match["full_name"]}. Choose EXISTING CUSTOMER and search using {phone_match["phone"]}.')
+                    else:
+                        raise ValueError('This phone number is already registered under another branch. Ask Management to review it.')
+                else:
+                    no='CUS-'+now().strftime('%Y%m%d%H%M%S')+'-'+secrets.token_hex(2).upper(); ts=now_str()
+                    cur=c.execute('INSERT INTO customers(customer_no,full_name,phone,id_no,address,created_at,updated_at,branch_id) VALUES(?,?,?,?,?,?,?,?)',(no,name,phone,id_no,address,ts,ts,branch_id)); customer_id=cur.lastrowid; ctype='REGISTERED'
         receipt=get_setting('receipt_prefix','KAKA')+'-'+now().strftime('%Y%m%d%H%M%S')+'-'+secrets.token_hex(2).upper(); ts=now_str()
         credit_payment_mode=False
         if credit:
