@@ -679,8 +679,8 @@ def dashboard(branch_id=None):
     stock_scope=' AND bs.branch_id=?' if branch_id is not None else ''
     stock_args=(int(branch_id),) if branch_id is not None else ()
     stock=c.execute('SELECT COALESCE(SUM(bs.qty*bs.avg_cost),0) v,COALESCE(SUM(bs.qty*bs.sell_price),0) retail_v,COALESCE(SUM(bs.qty),0) units,SUM(CASE WHEN bs.qty<=bs.reorder_level THEN 1 ELSE 0 END) low FROM branch_stock bs JOIN products p ON p.id=bs.product_id WHERE p.active=1'+stock_scope,stock_args).fetchone()
-    c.close()
     credit_collections=c.execute('SELECT COALESCE(SUM(cp.amount),0) v FROM credit_payments cp JOIN credit_accounts ca ON ca.id=cp.credit_id JOIN sales s ON s.id=ca.sale_id WHERE substr(cp.payment_date,1,10)=?'+credit_scope,credit_args).fetchone()['v']
+    c.close()
     cv=float(cogs['v'] or 0); rev=float(s['v'] or 0)
     return {'today_sales':rev,'transactions':s['n'],'expenses':p['v'],'mpesa':mp['v'],'cash':cash['v'],'credit_collections':float(credit_collections or 0),'today_cogs':cv,'today_gross_profit':float(all_revenue or 0)-cv,'cogs_lines':int(cogs['n'] or 0),'cogs_missing_lines':int(cogs['missing'] or 0),'cogs_estimated_lines':int(cogs['estimated'] or 0),'stock_value':stock['v'],'stock_retail_value':stock['retail_v'],'stock_units':stock['units'],'low_stock':stock['low'] or 0}
 
