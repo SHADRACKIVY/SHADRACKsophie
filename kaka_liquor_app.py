@@ -3442,7 +3442,7 @@ class Handler(BaseHTTPRequestHandler):
                 if billing.get('suspended') and role_name(u)!='ADMIN': return send_json(self,{'error':'Software subscription overdue. Contact Administrator.'},402)
                 require_perm_user(u,'CREATE_SALE'); q=(_qsval(qs,'q','') or '').strip()
                 if not q: return send_json(self,{'results':[]})
-                branch_id=branch_scope_for(u); customer_scope=' AND (branch_id=? OR branch_id IS NULL)' if branch_id is not None else ''; phone_q=re.sub(r'[\\s+\\-()]','',q); args=(f'%{q}%',f'%{q}%',f'%{q}%',f'%{phone_q}%',f'%{q}%',q,q,f'{q}%')+((int(branch_id),) if branch_id is not None else ())
+                branch_id=branch_scope_for(u); customer_scope=' AND (branch_id=? OR branch_id IS NULL)' if branch_id is not None else ''; phone_q=''.join(ch for ch in q if ch not in ' +()-'); where_args=(f'%{q}%',f'%{q}%',f'%{q}%',f'%{phone_q}%',f'%{q}%'); order_args=(q,q,f'{q}%'); args=where_args+((int(branch_id),) if branch_id is not None else ())+order_args
                 c=core.db.c(); like=f'%{q}%'; rows=c.execute("SELECT id,full_name,phone,id_no,address FROM customers WHERE active=1 AND (id_no LIKE ? OR full_name LIKE ? OR phone LIKE ? OR replace(replace(replace(phone,' ',''),'-',''),'+','') LIKE ? OR customer_no LIKE ?)"+customer_scope+" ORDER BY CASE WHEN id_no=? THEN 0 WHEN phone=? THEN 0 WHEN lower(full_name) LIKE lower(?) THEN 0 ELSE 1 END, full_name LIMIT 30",args).fetchall(); c.close(); return send_json(self,{'results':[dict(r) for r in rows]})
             if path=='/logout': return do_logout(self, _qsval(qs,'auto','0')=='1')
             u=session_user(self)
