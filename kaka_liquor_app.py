@@ -1357,7 +1357,7 @@ window.addEventListener('DOMContentLoaded',function(){renderPaymentRows();showRe
         actions+='</div>'
         recent_rows.append([esc(r['sold_at']),esc(r['receipt_no']),esc(r['customer']),esc(r['customer_type']+' · '+r['sale_type']),money(r['total']),esc(r['user_name']),actions])
     recent=html_table(['Date & Time','Receipt','Customer','Type','Total','Recorded By','Actions'],recent_rows)
-    credit_option='<option value="CREDIT">CREDIT CUSTOMER</option>' if core.get_setting('allow_credit_sales','YES')=='YES' else ''
+    credit_option='<option value="CREDIT">CREDIT CUSTOMER</option>'
     require_mpesa_code_js='true' if core.get_setting('require_mpesa_code','YES')=='YES' else 'false'
     content=content.replace('__CREDIT_OPTION__',credit_option).replace('__REQUIRE_MPESA_CODE__',require_mpesa_code_js).replace('__NOTICE__',notice).replace('__CSRF__',csrf_input(CURRENT_HANDLER)).replace('__BRANCH_FIELD__',branch_field).replace('__FULL_NAME__',esc(u['full_name'])).replace('__PRODUCT_OPTS__',product_opts).replace('__SEARCH_QUERY__',esc(search_query)).replace('__RESULT_HTML__',result_html).replace('__PAYMENTS__',payments).replace('__PAYMENT_OPTIONS__',''.join(f'<option value="{i}" {"selected" if i==default_payment_count else ""}>{i}</option>' for i in range(1,max_payments+1))).replace('__MAX_PAYMENTS__',str(max_payments)).replace('__MAX_TX__',str(max_payments)).replace('__RECENT_SALES__',recent).replace('__SELECTED_CUSTOMER_ID__',selected_customer_id_val).replace('__SELECTED_CUSTOMER_HTML__',selected_customer_html)
     return layout(u,'Sales / POS',branch_selector+content,'/sales','Direct sales entry')
@@ -3868,7 +3868,6 @@ class Handler(BaseHTTPRequestHandler):
                 cart.append({'product_id':line_pid,'qty':line_qty}); total_expected+=unit_price*line_qty
                 if not pid: pid=line_pid; qty=line_qty
             if customer_mode=='CREDIT':
-                if core.get_setting('allow_credit_sales','YES')!='YES': raise ValueError('Credit sales are disabled by Administrator.')
                 choice=form.get('credit_customer_choice','NEW').upper(); cid=int(form.get('customer_id','0') or 0) or None
                 if choice=='EXISTING':
                     if not cid: raise ValueError('Search by ID number or first name, select the customer, then click SAVE EXISTING CUSTOMER.')
