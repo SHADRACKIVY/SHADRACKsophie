@@ -3442,7 +3442,7 @@ class Handler(BaseHTTPRequestHandler):
                 if billing.get('suspended') and role_name(u)!='ADMIN': return send_json(self,{'error':'Software subscription overdue. Contact Administrator.'},402)
                 require_perm_user(u,'CREATE_SALE'); q=(_qsval(qs,'q','') or '').strip()
                 if not q: return send_json(self,{'results':[]})
-                branch_id=branch_scope_for(u); customer_scope=' AND branch_id=?' if branch_id is not None else ''; args=(f'%{q}%',f'%{q}%',f'%{q}%',f'%{q}%',q,q,f'{q}%')+((int(branch_id),) if branch_id is not None else ())
+                branch_id=branch_scope_for(u); customer_scope=' AND (branch_id=? OR branch_id IS NULL)' if branch_id is not None else ''; args=(f'%{q}%',f'%{q}%',f'%{q}%',f'%{q}%',q,q,f'{q}%')+((int(branch_id),) if branch_id is not None else ())
                 c=core.db.c(); like=f'%{q}%'; rows=c.execute("SELECT id,full_name,phone,id_no,address FROM customers WHERE active=1 AND (id_no LIKE ? OR full_name LIKE ? OR phone LIKE ? OR customer_no LIKE ?)"+customer_scope+" ORDER BY CASE WHEN id_no=? THEN 0 WHEN phone=? THEN 0 WHEN lower(full_name) LIKE lower(?) THEN 0 ELSE 1 END, full_name LIMIT 30",args).fetchall(); c.close(); return send_json(self,{'results':[dict(r) for r in rows]})
             if path=='/logout': return do_logout(self, _qsval(qs,'auto','0')=='1')
             u=session_user(self)
@@ -3629,7 +3629,7 @@ class Handler(BaseHTTPRequestHandler):
                 finally: c.close()
                 add_flash(session_token(self),f'Customer {customer["full_name"]} archived. Historical invoices and repayments were preserved.','success')
                 return redirect(self,'/customers')
-            if path=='/sales': return self.sales_post(u,form)
+           if path=='/sales': return self.sales_post(u,form)
             if path=='/suppliers':
                 if role_name(u) not in ('ADMIN','MANAGEMENT'):
                     raise PermissionError('Supplier registration is restricted to Management and Administrator.')
@@ -3898,7 +3898,7 @@ class Handler(BaseHTTPRequestHandler):
             if customer_mode=='CREDIT':
                 choice=form.get('credit_customer_choice','NEW').upper(); cid=int(form.get('customer_id','0') or 0) or None
                 if choice=='EXISTING':
-                    if not cid: raise ValueError('Search by ID number or first name, select the customer, then click SAVE EXISTING CUSTOMER.')
+                    if not cid: raise ValueError('Search by ID number or first name, select the customer, then click CREATE CREDIT INVOICE.')
                     customer={'id':cid}
                 elif choice=='NEW':
                     name=form.get('new_customer_name','').strip(); phone=form.get('new_customer_phone','').strip(); id_no=form.get('new_customer_id_no','').strip(); address=form.get('new_customer_address','').strip()
