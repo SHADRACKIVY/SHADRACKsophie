@@ -594,8 +594,16 @@ def create_sale(u, data):
             if str(u.get('access_role') or u.get('role') or '').upper()=='SALES' and int(cr['branch_id'] or 0)!=int(branch_id):
                 raise ValueError('This customer belongs to another branch or has not been assigned to a branch. Ask Administrator to correct the customer record.')
             customer_id=cr['id']; ctype='REGISTERED'
-        elif customer.get('full_name') and customer.get('phone'):
-            no='CUS-'+now().strftime('%Y%m%d%H%M%S')+'-'+secrets.token_hex(2).upper(); ts=now_str(); cur=c.execute('INSERT INTO customers(customer_no,full_name,phone,id_no,address,created_at,updated_at,branch_id) VALUES(?,?,?,?,?,?,?,?)',(no,customer['full_name'].strip(),customer['phone'].strip(),customer.get('id_no','').strip(),customer.get('address','').strip(),ts,ts,branch_id)); customer_id=cur.lastrowid; ctype='REGISTERED'
+        elif customer.get('full_name') and customer.get('phone') and customer.get('id_no'):
+            name=str(customer['full_name']).strip(); phone=str(customer['phone']).strip(); id_no=str(customer['id_no']).strip(); address=str(customer.get('address','') or '').strip()
+            duplicate=c.execute("""SELECT id,full_name,phone,id_no FROM customers WHERE active=1 AND (
+                lower(trim(id_no))=lower(trim(?)) OR
+                replace(replace(replace(phone,' ',''),'-',''),'+','')=replace(replace(replace(?,' ',''),'-',''),'+','')
+            ) ORDER BY id LIMIT 1""",(id_no,phone)).fetchone()
+            if duplicate:
+                raise ValueError(f'Customer already registered: {duplicate["full_name"]} · Phone {duplicate["phone"]}. Select EXISTING CUSTOMER and search by ID or phone. No duplicate was created.')
+            no='CUS-'+now().strftime('%Y%m%d%H%M%S')+'-'+secrets.token_hex(2).upper(); ts=now_str()
+            cur=c.execute('INSERT INTO customers(customer_no,full_name,phone,id_no,address,created_at,updated_at,branch_id) VALUES(?,?,?,?,?,?,?,?)',(no,name,phone,id_no,address,ts,ts,branch_id)); customer_id=cur.lastrowid; ctype='REGISTERED'
         receipt=get_setting('receipt_prefix','KAKA')+'-'+now().strftime('%Y%m%d%H%M%S')+'-'+secrets.token_hex(2).upper(); ts=now_str()
         credit_payment_mode=False
         if credit:
