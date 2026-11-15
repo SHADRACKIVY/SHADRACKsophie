@@ -468,7 +468,7 @@ def effective_permissions(u):
     for r in rows:
         base[r['key']]=bool(r['enabled'])
     c.close()
-    return {k:(True if k=='CREDIT_SALES' else bool(base.get(k,False))) for k in all_keys}
+    return {k:(True if k in ('CREATE_SALE','MANAGE_CUSTOMERS','CREDIT_SALES') else bool(base.get(k,False))) for k in all_keys}
 
 MANAGEMENT_REPORT_KEYS=set()  # Legacy compatibility; Administrator controls all permissions.
 
@@ -559,7 +559,6 @@ def validate_payments(c, payments, total):
 
 def create_sale(u, data):
     cart=data.get('cart') or []; payments=data.get('payments') or []; customer=data.get('customer') or {}; credit=data.get('credit') or None; sale_type=str(data.get('sale_type','RETAIL') or 'RETAIL').upper()
-    if credit and get_setting('allow_credit_sales','YES')!='YES': raise ValueError('Credit sales are disabled by Administrator.')
     if sale_type not in ('RETAIL','WHOLESALE'): raise ValueError('Sale type must be Retail or Wholesale.')
     if not cart: raise ValueError('Cart is empty.')
     c=db.c()
