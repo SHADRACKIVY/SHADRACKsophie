@@ -4240,6 +4240,11 @@ def do_POST(self):
                 return send_json(self,mpesa.register_c2b_urls(core))
             except Exception as e: return send_json(self,{'error':str(e)},400)
         if path=='/change-password': return _change_password_post(self,u,form)
+        if path=='/customers/register':
+            try:
+                return self.save_new_customer_post(u,form)
+            except Exception as e:
+                return send_html(self,sales_page(u,str(e),query={'branch_id':form.get('branch_id','')}),400)
         if path=='/sales': return self.sales_post(u,form)
         if path=='/purchases':
             require_perm_user(u,'CREATE_PURCHASE')
