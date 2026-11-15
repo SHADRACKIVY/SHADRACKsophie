@@ -3453,7 +3453,7 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/mpesa/live-messages': return send_json(self,mpesa_live_messages_json(u,qs))
             if path=='/cash-paybill-transfer': return send_html(self,cash_paybill_transfer_page(u))
             if path=='/paybill-cash-transfer': return send_html(self,paybill_cash_transfer_page(u))
-             if path=='/financials':
+            if path=='/financials':
                 if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
                 return send_html(self,financials_page(u,qs))
             if path=='/financials/export': return financials_export(self,u,qs)
