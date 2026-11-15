@@ -3629,7 +3629,7 @@ class Handler(BaseHTTPRequestHandler):
                 finally: c.close()
                 add_flash(session_token(self),f'Customer {customer["full_name"]} archived. Historical invoices and repayments were preserved.','success')
                 return redirect(self,'/customers')
-           if path=='/sales': return self.sales_post(u,form)
+            if path=='/sales': return self.sales_post(u,form)
             if path=='/suppliers':
                 if role_name(u) not in ('ADMIN','MANAGEMENT'):
                     raise PermissionError('Supplier registration is restricted to Management and Administrator.')
@@ -4218,7 +4218,7 @@ def do_POST(self):
                 return send_json(self,mpesa.register_c2b_urls(core))
             except Exception as e: return send_json(self,{'error':str(e)},400)
         if path=='/change-password': return _change_password_post(self,u,form)
-         if path=='/sales': return self.sales_post(u,form)
+        if path=='/sales': return self.sales_post(u,form)
         if path=='/purchases':
             require_perm_user(u,'CREATE_PURCHASE')
             try: no,total=save_purchase(u,form); add_flash(session_token(self),f'Purchase {no} saved successfully.','success'); return redirect(self,'/purchases')
