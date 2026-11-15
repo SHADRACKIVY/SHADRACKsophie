@@ -3629,7 +3629,7 @@ class Handler(BaseHTTPRequestHandler):
                 finally: c.close()
                 add_flash(session_token(self),f'Customer {customer["full_name"]} archived. Historical invoices and repayments were preserved.','success')
                 return redirect(self,'/customers')
-           if path=='/sales': return self.sales_post(u,form)
+            if path=='/sales': return self.sales_post(u,form)
             if path=='/suppliers':
                 if role_name(u) not in ('ADMIN','MANAGEMENT'):
                     raise PermissionError('Supplier registration is restricted to Management and Administrator.')
