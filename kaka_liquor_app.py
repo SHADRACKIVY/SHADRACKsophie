@@ -1322,7 +1322,7 @@ __BRANCH_FIELD__
 <section class="card" style="margin-top:14px"><div class="section-head"><h2>Customer</h2><span class="pill">WALK-IN OR CREDIT CUSTOMER</span></div>
 <div class="form-grid"><div><label>Customer Type</label><select name="customer_mode" id="customer_mode" onchange="toggleCustomerMode()"><option value="WALK_IN">WALK-IN CUSTOMER</option>__CREDIT_OPTION__</select></div></div>
 <div id="credit_customer_panel" style="display:none;margin-top:14px"><div class="segmented"><label><input type="radio" name="credit_customer_choice" value="NEW" checked onchange="toggleCreditChoice()"> NEW CREDIT CUSTOMER</label><label><input type="radio" name="credit_customer_choice" value="EXISTING" onchange="toggleCreditChoice()"> EXISTING CUSTOMER</label></div>
-<div id="new_customer_panel" style="margin-top:12px"><div class="form-grid"><div><label>Full Name *</label><input name="new_customer_name" id="new_customer_name"></div><div><label>Phone Number *</label><input name="new_customer_phone" id="new_customer_phone"></div><div><label>ID Number / Passport *</label><input name="new_customer_id_no" id="new_customer_id_no"></div><div><label>Address / Location</label><input name="new_customer_address" id="new_customer_address"></div></div><div class="actions" style="margin-top:12px"><button class="btn gold" type="submit" name="customer_action" value="SAVE_NEW_CUSTOMER">SAVE NEW CUSTOMER</button></div></div>
+<div id="new_customer_panel" style="margin-top:12px"><div class="form-grid"><div><label>Full Name *</label><input name="new_customer_name" id="new_customer_name"></div><div><label>Phone Number *</label><input name="new_customer_phone" id="new_customer_phone"></div><div><label>ID Number / Passport *</label><input name="new_customer_id_no" id="new_customer_id_no"></div><div><label>Address / Location</label><input name="new_customer_address" id="new_customer_address"></div></div><div class="actions" style="margin-top:12px"><button class="btn gold" type="submit" formaction="/customers/register" formmethod="post">SAVE NEW CUSTOMER</button></div></div>
 <div id="existing_customer_panel" style="display:none;margin-top:12px"><div class="form-grid"><div style="grid-column:1/-1"><label>Search by ID Number or First Name</label><div style="display:flex;gap:8px"><input id="customer_search" value="__SEARCH_QUERY__" placeholder="e.g. 12345678 or John"><button type="button" class="btn" onclick="searchCustomers()">SEARCH</button></div></div></div><div id="customer_search_results">__RESULT_HTML__</div><div id="selected_customer_card" class="selected-customer" style="display:none"></div>__SELECTED_CUSTOMER_HTML__<div class="actions" style="margin-top:12px"><button class="btn gold" type="submit" name="customer_action" value="SAVE_EXISTING_CUSTOMER">SAVE EXISTING CUSTOMER</button></div></div>
 <div class="form-grid" style="margin-top:12px"><div><label>When to Pay *</label><input type="date" name="due_date" id="due_date"></div><div><label>Collateral Held for Exchange *</label><input name="collateral" id="collateral" placeholder="ID / item / asset"></div><div><label>Collateral Value</label><input type="number" min="0" step="0.01" name="collateral_value" id="collateral_value" value="0"></div></div><div class="actions" style="margin-top:12px"><button class="btn gold full" type="submit" id="create_credit_invoice">CREATE CREDIT INVOICE</button></div></div></section>
 </div><div>
@@ -3453,6 +3453,7 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/mpesa/live-messages': return send_json(self,mpesa_live_messages_json(u,qs))
             if path=='/cash-paybill-transfer': return send_html(self,cash_paybill_transfer_page(u))
             if path=='/paybill-cash-transfer': return send_html(self,paybill_cash_transfer_page(u))
+            if path=='/customers/register': return self.save_new_customer_post(u,form)
             if path=='/financials':
                 if role_name(u)!='ADMIN': raise PermissionError('Administrator permission required.')
                 return send_html(self,financials_page(u,qs))
@@ -3821,6 +3822,55 @@ class Handler(BaseHTTPRequestHandler):
             return mpesa_confirm_direct_payment(u,form)
         except Exception as e:
             return {'error':str(e)}
+
+    def save_new_customer_post(self,u,form):
+        """Register a credit customer independently of the POS sale submission."""
+        require_perm_user(u,'CREATE_SALE')
+        require_perm_user(u,'MANAGE_CUSTOMERS')
+        c=None
+        try:
+            role=role_name(u)
+            submitted_branch=int(form.get('branch_id') or 0)
+            branch_id=submitted_branch if role in ('ADMIN','MANAGEMENT') else int(u.get('branch_id') or 0)
+            if not branch_id:
+                raise ValueError('Select an active branch before registering a customer.')
+            if role not in ('ADMIN','MANAGEMENT') and submitted_branch not in (0,branch_id):
+                raise PermissionError('You can register customers only in your assigned branch.')
+            name=str(form.get('new_customer_name') or '').strip()
+            phone=str(form.get('new_customer_phone') or '').strip()
+            id_no=str(form.get('new_customer_id_no') or '').strip()
+            address=str(form.get('new_customer_address') or '').strip()
+            if not name or not phone or not id_no:
+                raise ValueError('Enter the customer full name, phone number and ID number/passport.')
+            c=core.db.c()
+            c.execute('BEGIN IMMEDIATE')
+            duplicate=c.execute("""SELECT id,full_name,phone,id_no FROM customers
+                WHERE active=1 AND (
+                    lower(trim(id_no))=lower(trim(?))
+                    OR replace(replace(replace(phone,' ',''),'-',''),'+','')=
+                       replace(replace(replace(?,' ',''),'-',''),'+','')
+                ) ORDER BY id LIMIT 1""",(id_no,phone)).fetchone()
+            if duplicate:
+                raise ValueError(f'Customer already registered: {duplicate["full_name"]} · Phone {duplicate["phone"]}. Choose EXISTING CUSTOMER; no duplicate was created.')
+            ts=now()
+            customer_no='CUS-'+dt.datetime.now().strftime('%Y%m%d%H%M%S')+'-'+secrets.token_hex(2).upper()
+            cur=c.execute("""INSERT INTO customers
+                (customer_no,full_name,phone,id_no,address,created_at,updated_at,branch_id)
+                VALUES(?,?,?,?,?,?,?,?)""",(customer_no,name,phone,id_no,address,ts,ts,branch_id))
+            customer_id=int(cur.lastrowid)
+            core.db.audit(c,u,'CREATE','CUSTOMER',customer_id,f'{customer_no} {name}; branch_id={branch_id}')
+            c.commit()
+            add_flash(session_token(self),f'Customer {name} registered successfully. You can now continue with the credit invoice.','success')
+            return redirect(self,'/sales?customer_id='+str(customer_id)+'&branch_id='+str(branch_id))
+        except Exception as e:
+            if c:
+                try: c.rollback()
+                except Exception: pass
+            return send_html(self,sales_page(u,str(e),query={'branch_id':str(branch_id) if 'branch_id' in locals() else ''}),400)
+        finally:
+            if c:
+                try: c.close()
+                except Exception: pass
 
     def sales_post(self,u,form):
         require_perm_user(u,'CREATE_SALE')
