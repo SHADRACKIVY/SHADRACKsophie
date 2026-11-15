@@ -666,8 +666,14 @@ def dashboard(branch_id=None):
     p=c.execute('SELECT COALESCE(SUM(amount),0) v FROM expenses WHERE substr(expense_date,1,10)=?'+scope,args).fetchone()
     pay_scope=' AND s.branch_id=?' if branch_id is not None else ''
     pay_args=(today,int(branch_id)) if branch_id is not None else (today,)
-    mp=c.execute('SELECT COALESCE(SUM(sp.amount),0) v FROM sale_payments sp JOIN sales s ON s.id=sp.sale_id WHERE substr(s.sold_at,1,10)=? AND sp.payment_method="MPESA"'+pay_scope,pay_args).fetchone()
-    cash=c.execute('SELECT COALESCE(SUM(sp.amount),0) v FROM sale_payments sp JOIN sales s ON s.id=sp.sale_id WHERE substr(s.sold_at,1,10)=? AND sp.payment_method="CASH"'+pay_scope,pay_args).fetchone()
+    mp_sale=c.execute('SELECT COALESCE(SUM(sp.amount),0) v FROM sale_payments sp JOIN sales s ON s.id=sp.sale_id WHERE substr(s.sold_at,1,10)=? AND sp.payment_method="MPESA"'+pay_scope,pay_args).fetchone()
+    cash_sale=c.execute('SELECT COALESCE(SUM(sp.amount),0) v FROM sale_payments sp JOIN sales s ON s.id=sp.sale_id WHERE substr(s.sold_at,1,10)=? AND sp.payment_method="CASH"'+pay_scope,pay_args).fetchone()
+    credit_scope=' AND s.branch_id=?' if branch_id is not None else ''
+    credit_args=(today,int(branch_id)) if branch_id is not None else (today,)
+    mp_credit=c.execute('SELECT COALESCE(SUM(cp.amount),0) v FROM credit_payments cp JOIN credit_accounts ca ON ca.id=cp.credit_id JOIN sales s ON s.id=ca.sale_id WHERE substr(cp.payment_date,1,10)=? AND cp.payment_method="MPESA"'+credit_scope,credit_args).fetchone()
+    cash_credit=c.execute('SELECT COALESCE(SUM(cp.amount),0) v FROM credit_payments cp JOIN credit_accounts ca ON ca.id=cp.credit_id JOIN sales s ON s.id=ca.sale_id WHERE substr(cp.payment_date,1,10)=? AND cp.payment_method="CASH"'+credit_scope,credit_args).fetchone()
+    mp={'v':float(mp_sale['v'] or 0)+float(mp_credit['v'] or 0)}
+    cash={'v':float(cash_sale['v'] or 0)+float(cash_credit['v'] or 0)}
     cogs=c.execute('SELECT COALESCE(SUM(sl.qty*sl.unit_cost),0) v,COUNT(*) n,SUM(CASE WHEN COALESCE(sl.cogs_cost_source,"RECORDED")="MISSING_COST" OR COALESCE(sl.unit_cost,0)<=0 THEN 1 ELSE 0 END) missing,SUM(CASE WHEN COALESCE(sl.cogs_cost_source,"RECORDED")="ESTIMATED_CURRENT_AVG_COST" THEN 1 ELSE 0 END) estimated FROM sale_lines sl JOIN sales s ON s.id=sl.sale_id WHERE substr(s.sold_at,1,10)=?'+pay_scope,pay_args).fetchone()
     all_revenue=c.execute('SELECT COALESCE(SUM(total),0) v FROM sales WHERE substr(sold_at,1,10)=?'+scope,args).fetchone()['v']
     stock_scope=' AND bs.branch_id=?' if branch_id is not None else ''
